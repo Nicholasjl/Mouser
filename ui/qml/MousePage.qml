@@ -381,7 +381,7 @@ Item {
                             }
                         }
 
-                        // Running badge
+                        // Connection status badge
                         Rectangle {
                             anchors {
                                 right: parent.right; rightMargin: 28
@@ -389,7 +389,9 @@ Item {
                             }
                             width: statusRow.implicitWidth + 16
                             height: 24; radius: 12
-                            color: Qt.rgba(0, 0.83, 0.67, 0.12)
+                            color: backend.mouseConnected
+                                   ? Qt.rgba(0, 0.83, 0.67, 0.12)
+                                   : Qt.rgba(0.9, 0.3, 0.3, 0.15)
 
                             Row {
                                 id: statusRow
@@ -398,13 +400,16 @@ Item {
 
                                 Rectangle {
                                     width: 7; height: 7; radius: 4
-                                    color: Theme.accent
+                                    color: backend.mouseConnected
+                                           ? Theme.accent : "#e05555"
                                     anchors.verticalCenter: parent.verticalCenter
                                 }
                                 Text {
-                                    text: "Running"
+                                    text: backend.mouseConnected
+                                          ? "Connected" : "Not Connected"
                                     font { family: Theme.fontFamily; pixelSize: 11 }
-                                    color: Theme.accent
+                                    color: backend.mouseConnected
+                                           ? Theme.accent : "#e05555"
                                 }
                             }
                         }

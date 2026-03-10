@@ -28,26 +28,32 @@ class Backend(QObject):
     activeProfileChanged = Signal()
     statusMessage = Signal(str)
     dpiFromDevice = Signal(int)
+    mouseConnectedChanged = Signal()
 
     # Internal cross-thread signals
     _profileSwitchRequest = Signal(str)
     _dpiReadRequest = Signal(int)
+    _connectionChangeRequest = Signal(bool)
 
     def __init__(self, engine=None, parent=None):
         super().__init__(parent)
         self._engine = engine
         self._cfg = load_config()
+        self._mouse_connected = False
 
         # Cross-thread signal connections
         self._profileSwitchRequest.connect(
             self._handleProfileSwitch, Qt.QueuedConnection)
         self._dpiReadRequest.connect(
             self._handleDpiRead, Qt.QueuedConnection)
+        self._connectionChangeRequest.connect(
+            self._handleConnectionChange, Qt.QueuedConnection)
 
         # Wire engine callbacks
         if engine:
             engine.set_profile_change_callback(self._onEngineProfileSwitch)
             engine.set_dpi_read_callback(self._onEngineDpiRead)
+            engine.set_connection_change_callback(self._onEngineConnectionChange)
 
     # ── Properties ─────────────────────────────────────────────
 
@@ -118,6 +124,10 @@ class Backend(QObject):
     @Property(str, notify=activeProfileChanged)
     def activeProfile(self):
         return self._cfg.get("active_profile", "default")
+
+    @Property(bool, notify=mouseConnectedChanged)
+    def mouseConnected(self):
+        return self._mouse_connected
 
     @Property(list, notify=profilesChanged)
     def profiles(self):
@@ -251,6 +261,10 @@ class Backend(QObject):
         """Called from engine thread — posts to Qt main thread."""
         self._dpiReadRequest.emit(dpi)
 
+    def _onEngineConnectionChange(self, connected):
+        """Called from engine/hook thread — posts to Qt main thread."""
+        self._connectionChangeRequest.emit(connected)
+
     @Slot(str)
     def _handleProfileSwitch(self, profile_name):
         """Runs on Qt main thread."""
@@ -266,3 +280,9 @@ class Backend(QObject):
         self._cfg.setdefault("settings", {})["dpi"] = dpi
         self.settingsChanged.emit()
         self.dpiFromDevice.emit(dpi)
+
+    @Slot(bool)
+    def _handleConnectionChange(self, connected):
+        """Runs on Qt main thread."""
+        self._mouse_connected = connected
+        self.mouseConnectedChanged.emit()

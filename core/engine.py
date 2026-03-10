@@ -29,8 +29,10 @@ class Engine:
         self._current_profile: str = self.cfg.get("active_profile", "default")
         self._app_detector = AppDetector(self._on_app_change)
         self._profile_change_cb = None       # UI callback
+        self._connection_change_cb = None   # UI callback for device status
         self._lock = threading.Lock()
         self._setup_hooks()
+        self.hook.set_connection_change_callback(self._on_connection_change)
 
     # ------------------------------------------------------------------
     # Hook wiring
@@ -102,6 +104,21 @@ class Engine:
     def set_profile_change_callback(self, cb):
         """Register a callback ``cb(profile_name)`` invoked on auto-switch."""
         self._profile_change_cb = cb
+
+    def _on_connection_change(self, connected):
+        if self._connection_change_cb:
+            try:
+                self._connection_change_cb(connected)
+            except Exception:
+                pass
+
+    def set_connection_change_callback(self, cb):
+        """Register ``cb(connected: bool)`` invoked on device connect/disconnect."""
+        self._connection_change_cb = cb
+
+    @property
+    def device_connected(self):
+        return self.hook.device_connected
 
     # ------------------------------------------------------------------
     # Public API

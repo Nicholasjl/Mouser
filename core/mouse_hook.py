@@ -197,6 +197,10 @@ WM_APP = 0x8000
 WM_APP_INJECT_VSCROLL = WM_APP + 1   # wParam = signed delta (as c_long)
 WM_APP_INJECT_HSCROLL = WM_APP + 2   # wParam = signed delta (as c_long)
 
+# Device change notification constants
+WM_DEVICECHANGE = 0x0219
+DBT_DEVNODES_CHANGED = 0x0007        # device tree changed
+
 # Scroll injection via key_simulator (which has working SendInput + INPUT structs)
 from core.key_simulator import inject_scroll as _inject_scroll_impl
 from core.key_simulator import MOUSEEVENTF_WHEEL, MOUSEEVENTF_HWHEEL
@@ -238,6 +242,11 @@ class MouseHook:
         self._prev_raw_buttons = {}   # hDevice -> last ulRawButtons value
         # HID++ gesture listener (hidapi-based)
         self._hid_gesture = None
+        # Device-change rehook debounce
+        self._last_rehook_time = 0
+        # Device connection state + callback
+        self._device_connected = False
+        self._connection_change_cb = None
 
     def register(self, event_type, callback):
         """Register a callback for a specific mouse event type."""
@@ -256,6 +265,26 @@ class MouseHook:
         Call this before re-registering bindings for a new profile."""
         self._callbacks.clear()
         self._blocked_events.clear()
+
+    def set_connection_change_callback(self, cb):
+        """Register ``cb(connected: bool)`` invoked on device connect/disconnect."""
+        self._connection_change_cb = cb
+
+    @property
+    def device_connected(self):
+        return self._device_connected
+
+    def _set_device_connected(self, connected):
+        if connected == self._device_connected:
+            return
+        self._device_connected = connected
+        state = "Connected" if connected else "Disconnected"
+        print(f"[MouseHook] Device {state}")
+        if self._connection_change_cb:
+            try:
+                self._connection_change_cb(connected)
+            except Exception:
+                pass
 
     def set_debug_callback(self, callback):
         """Set a callback to receive ALL raw mouse events for detection."""
@@ -419,6 +448,11 @@ class MouseHook:
             self._hscroll_posted = False
             if delta != 0:
                 _inject_scroll_impl(MOUSEEVENTF_HWHEEL, delta)
+            return 0
+
+        if msg == WM_DEVICECHANGE:
+            if wParam == DBT_DEVNODES_CHANGED:
+                self._on_device_change()
             return 0
 
         return DefWindowProcW(hwnd, msg, wParam, lParam)
@@ -590,6 +624,40 @@ class MouseHook:
             self._hook = None
         print("[MouseHook] Hook removed")
 
+    # ── Device change / hook health ─────────────────────────────
+
+    def _on_device_change(self):
+        """Handle WM_DEVICECHANGE — a mouse was plugged/unplugged or
+        a Bluetooth device connected/disconnected.  Debounced to avoid
+        rapid-fire reinstalls."""
+        now = time.time()
+        if now - self._last_rehook_time < 2.0:
+            return
+        self._last_rehook_time = now
+        print("[MouseHook] Device change detected — refreshing hook")
+        # Clear stale device caches so reconnected devices are re-queried
+        self._device_name_cache.clear()
+        self._prev_raw_buttons.clear()
+        self._reinstall_hook()
+
+    def _reinstall_hook(self):
+        """Reinstall the low-level mouse hook to recover from cases
+        where Windows silently removed it."""
+        if self._hook:
+            UnhookWindowsHookEx(self._hook)
+            self._hook = None
+        self._hook_proc = HOOKPROC(self._low_level_handler)
+        self._hook = SetWindowsHookExW(
+            WH_MOUSE_LL,
+            self._hook_proc,
+            GetModuleHandleW(None),
+            0,
+        )
+        if self._hook:
+            print("[MouseHook] Hook reinstalled successfully")
+        else:
+            print("[MouseHook] Failed to reinstall hook!")
+
     # ── HID++ gesture helpers ─────────────────────────────────────
 
     def _on_hid_gesture_down(self):
@@ -604,6 +672,14 @@ class MouseHook:
             self._gesture_active = False
             self._dispatch(MouseEvent(MouseEvent.GESTURE_UP))
 
+    def _on_hid_connect(self):
+        """Called from HidGestureListener when device is opened."""
+        self._set_device_connected(True)
+
+    def _on_hid_disconnect(self):
+        """Called from HidGestureListener when device is lost."""
+        self._set_device_connected(False)
+
     def start(self):
         """Start the mouse hook on a background thread."""
         if self._hook_thread and self._hook_thread.is_alive():
@@ -614,6 +690,8 @@ class MouseHook:
             self._hid_gesture = HidGestureListener(
                 on_down=self._on_hid_gesture_down,
                 on_up=self._on_hid_gesture_up,
+                on_connect=self._on_hid_connect,
+                on_disconnect=self._on_hid_disconnect,
             )
             self._hid_gesture.start()
 

@@ -19,6 +19,8 @@ No telemetry. No cloud. No Logitech account required.
 - **DPI / pointer speed control** — slider from 200–8000 DPI with quick presets, synced to the device via HID++
 - **Scroll direction inversion** — independent toggles for vertical and horizontal scroll
 - **Gesture button support** — full HID++ 2.0 divert on Bluetooth (no Logitech software needed)
+- **Auto-reconnection** — automatically detects when the mouse is turned off/on or disconnected/reconnected and restores full functionality without restarting the app
+- **Live connection status** — the UI shows a real-time "Connected" / "Not Connected" badge that updates as the mouse connects or disconnects
 - **Modern Qt Quick UI** — dark Material theme with interactive mouse diagram and per-button action picker
 - **System tray** — runs in background, hides to tray on close, toggle remapping on/off from tray menu
 - **Auto-detect foreground app** — polls the active window and switches profiles instantly
@@ -231,6 +233,14 @@ Polls the foreground window every 300ms using `GetForegroundWindow` → `GetWind
 ### Engine (`engine.py`)
 
 The central orchestrator. On app change, it performs a **lightweight profile switch** — clears and re-wires hook callbacks without tearing down the hook thread or HID++ connection. This avoids the latency and instability of a full hook restart.
+
+### Device Reconnection
+
+Mouser handles mouse power-off/on cycles automatically:
+
+- **HID++ layer** — `HidGestureListener` detects device disconnection (read errors) and enters a reconnect loop, retrying every 2–5 seconds until the device is back
+- **Hook layer** — `MouseHook` listens for `WM_DEVICECHANGE` notifications and reinstalls the low-level mouse hook when devices are added or removed
+- **UI layer** — connection state flows from HID++ → MouseHook → Engine → Backend (cross-thread safe via Qt signals) → QML, updating the status badge in real time
 
 ### Configuration
 

@@ -69,9 +69,12 @@ def _parse(raw):
 class HidGestureListener:
     """Background thread: diverts the gesture button and listens via HID++."""
 
-    def __init__(self, on_down=None, on_up=None):
-        self._on_down   = on_down
-        self._on_up     = on_up
+    def __init__(self, on_down=None, on_up=None,
+                 on_connect=None, on_disconnect=None):
+        self._on_down       = on_down
+        self._on_up         = on_up
+        self._on_connect    = on_connect
+        self._on_disconnect = on_disconnect
         self._dev       = None          # hid.device()
         self._thread    = None
         self._running   = False
@@ -79,6 +82,7 @@ class HidGestureListener:
         self._dpi_idx   = None          # feature index of ADJUSTABLE_DPI
         self._dev_idx   = BT_DEV_IDX
         self._held      = False
+        self._connected = False         # True while HID++ device is open
         self._pending_dpi = None        # set by set_dpi(), applied in loop
         self._dpi_result  = None        # True/False after apply
 
@@ -136,15 +140,14 @@ class HidGestureListener:
         self._dev.write(buf)
 
     def _rx(self, timeout_ms=2000):
-        """Read one HID input report (blocking with timeout)."""
+        """Read one HID input report (blocking with timeout).
+        Raises on device error (e.g., disconnection) so callers
+        can trigger reconnection."""
         dev = self._dev
         if dev is None:
             return None
-        try:
-            d = dev.read(64, timeout_ms)
-            return list(d) if d else None
-        except Exception:
-            return None
+        d = dev.read(64, timeout_ms)
+        return list(d) if d else None
 
     def _request(self, feat, func, params, timeout_ms=2000):
         """Send a long HID++ request, wait for matching response."""
@@ -154,7 +157,10 @@ class HidGestureListener:
             return None
         deadline = time.time() + timeout_ms / 1000
         while time.time() < deadline:
-            raw = self._rx(min(500, timeout_ms))
+            try:
+                raw = self._rx(min(500, timeout_ms))
+            except Exception:
+                return None
             if raw is None:
                 continue
             msg = _parse(raw)
@@ -384,6 +390,12 @@ class HidGestureListener:
                     time.sleep(0.1)
                 continue
 
+            self._connected = True
+            if self._on_connect:
+                try:
+                    self._on_connect()
+                except Exception:
+                    pass
             print("[HidGesture] Listening for gesture events…")
             try:
                 while self._running:
@@ -409,6 +421,13 @@ class HidGestureListener:
             self._dev = None
             self._feat_idx = None
             self._held = False
+            if self._connected:
+                self._connected = False
+                if self._on_disconnect:
+                    try:
+                        self._on_disconnect()
+                    except Exception:
+                        pass
 
             if self._running:
                 time.sleep(2)
