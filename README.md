@@ -163,7 +163,9 @@ python main_qml.py --hid-backend=hidapi
 python main_qml.py --hid-backend=auto
 ```
 
-Use this only for troubleshooting. `auto` is the default behavior.
+Use this only for troubleshooting. On macOS, Mouser now defaults to `iokit`;
+`hidapi` and `auto` remain available as manual overrides for debugging. Other
+platforms continue to default to `auto`.
 
 ### Creating a Desktop Shortcut
 

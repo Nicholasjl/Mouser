@@ -109,7 +109,14 @@ if sys.platform == "darwin":
         print(f"[HidGesture] macOS native HID unavailable: {exc}")
 
 
-_BACKEND_PREFERENCE = "auto"
+def _default_backend_preference(platform_name=None):
+    platform_name = sys.platform if platform_name is None else platform_name
+    if platform_name == "darwin":
+        return "iokit"
+    return "auto"
+
+
+_BACKEND_PREFERENCE = _default_backend_preference()
 
 
 def set_backend_preference(preference):
