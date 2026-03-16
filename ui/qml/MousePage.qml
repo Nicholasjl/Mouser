@@ -17,20 +17,22 @@ Item {
     // ── Profile state ─────────────────────────────────────────
     property string selectedProfile: backend.activeProfile
     property string selectedProfileLabel: ""
-    property var selectedProfileMappings: []
+    property var selectedProfileMappingState: ({})
 
     Component.onCompleted: selectProfile(backend.activeProfile)
 
     function refreshSelectedProfileMappings() {
-        selectedProfileMappings = backend.getProfileMappings(selectedProfile)
+        var mappings = backend.getProfileMappings(selectedProfile)
+        var mappingState = ({})
+        for (var i = 0; i < mappings.length; i++) {
+            var mapping = mappings[i]
+            mappingState[mapping.key] = mapping
+        }
+        selectedProfileMappingState = mappingState
     }
 
     function mappingFor(key) {
-        for (var i = 0; i < selectedProfileMappings.length; i++) {
-            if (selectedProfileMappings[i].key === key)
-                return selectedProfileMappings[i]
-        }
-        return null
+        return selectedProfileMappingState[key] || null
     }
 
     function selectProfile(name) {
@@ -74,6 +76,40 @@ Item {
     property string selectedButton: ""
     property string selectedButtonName: ""
     property string selectedActionId: ""
+    readonly property string hscrollLeftActionId: selectedProfileMappingState.hscroll_left
+                                             ? selectedProfileMappingState.hscroll_left.actionId
+                                             : "none"
+    readonly property string hscrollLeftActionLabel: selectedProfileMappingState.hscroll_left
+                                                ? selectedProfileMappingState.hscroll_left.actionLabel
+                                                : "Do Nothing"
+    readonly property string hscrollRightActionId: selectedProfileMappingState.hscroll_right
+                                              ? selectedProfileMappingState.hscroll_right.actionId
+                                              : "none"
+    readonly property string hscrollRightActionLabel: selectedProfileMappingState.hscroll_right
+                                                 ? selectedProfileMappingState.hscroll_right.actionLabel
+                                                 : "Do Nothing"
+    readonly property string gestureTapActionId: selectedProfileMappingState.gesture
+                                            ? selectedProfileMappingState.gesture.actionId
+                                            : "none"
+    readonly property string gestureTapActionLabel: selectedProfileMappingState.gesture
+                                               ? selectedProfileMappingState.gesture.actionLabel
+                                               : "Do Nothing"
+    readonly property string gestureLeftActionId: selectedProfileMappingState.gesture_left
+                                             ? selectedProfileMappingState.gesture_left.actionId
+                                             : "none"
+    readonly property string gestureRightActionId: selectedProfileMappingState.gesture_right
+                                              ? selectedProfileMappingState.gesture_right.actionId
+                                              : "none"
+    readonly property string gestureUpActionId: selectedProfileMappingState.gesture_up
+                                           ? selectedProfileMappingState.gesture_up.actionId
+                                           : "none"
+    readonly property string gestureDownActionId: selectedProfileMappingState.gesture_down
+                                             ? selectedProfileMappingState.gesture_down.actionId
+                                             : "none"
+    readonly property bool hasGestureSwipeAction: gestureLeftActionId !== "none"
+                                             || gestureRightActionId !== "none"
+                                             || gestureUpActionId !== "none"
+                                             || gestureDownActionId !== "none"
 
     function selectButton(key) {
         if (selectedButton === key) {
@@ -140,17 +176,9 @@ Item {
     function gestureSummary() {
         if (!backend.supportsGestureDirections)
             return actionFor("gesture")
-
-        var hasSwipeAction =
-                actionFor_id("gesture_left") !== "none"
-                || actionFor_id("gesture_right") !== "none"
-                || actionFor_id("gesture_up") !== "none"
-                || actionFor_id("gesture_down") !== "none"
-
-        if (!hasSwipeAction)
-            return "Tap: " + actionFor("gesture")
-
-        return "Tap: " + actionFor("gesture") + " | Swipes configured"
+        if (!hasGestureSwipeAction)
+            return "Tap: " + gestureTapActionLabel
+        return "Tap: " + gestureTapActionLabel + " | Swipes configured"
     }
 
     // ── Main two-column layout ────────────────────────────────
@@ -622,7 +650,7 @@ Item {
                             buttonKey: "hscroll_left"
                             isHScroll: true
                             label: "Horizontal scroll"
-                            sublabel: "L: " + actionFor("hscroll_left") + " | R: " + actionFor("hscroll_right")
+                            sublabel: "L: " + hscrollLeftActionLabel + " | R: " + hscrollRightActionLabel
                             labelSide: "right"
                             labelOffX: 200; labelOffY: -50
                         }
@@ -713,7 +741,7 @@ Item {
                                         delegate: ActionChip {
                                             actionId: modelData.id
                                             actionLabel: modelData.label
-                                            isCurrent: modelData.id === actionFor_id("hscroll_left")
+                                            isCurrent: modelData.id === hscrollLeftActionId
                                             onPicked: function(aid) {
                                                 backend.setProfileMapping(
                                                     selectedProfile, "hscroll_left", aid)
@@ -738,7 +766,7 @@ Item {
                                         delegate: ActionChip {
                                             actionId: modelData.id
                                             actionLabel: modelData.label
-                                            isCurrent: modelData.id === actionFor_id("hscroll_right")
+                                            isCurrent: modelData.id === hscrollRightActionId
                                             onPicked: function(aid) {
                                                 backend.setProfileMapping(
                                                     selectedProfile, "hscroll_right", aid)
@@ -767,7 +795,7 @@ Item {
                                     textRole: "label"
                                     Material.accent: theme.accent
                                     font { family: uiState.fontFamily; pixelSize: 11 }
-                                    currentIndex: actionIndexForId(actionFor_id("gesture"))
+                                    currentIndex: actionIndexForId(gestureTapActionId)
                                     onActivated: function(index) {
                                         var aid = backend.allActions[index].id
                                         backend.setProfileMapping(selectedProfile, "gesture", aid)
@@ -832,7 +860,7 @@ Item {
                                         textRole: "label"
                                         Material.accent: theme.accent
                                         font { family: uiState.fontFamily; pixelSize: 11 }
-                                        currentIndex: actionIndexForId(actionFor_id("gesture_left"))
+                                        currentIndex: actionIndexForId(gestureLeftActionId)
                                         onActivated: function(index) {
                                             backend.setProfileMapping(
                                                 selectedProfile,
@@ -859,7 +887,7 @@ Item {
                                         textRole: "label"
                                         Material.accent: theme.accent
                                         font { family: uiState.fontFamily; pixelSize: 11 }
-                                        currentIndex: actionIndexForId(actionFor_id("gesture_right"))
+                                        currentIndex: actionIndexForId(gestureRightActionId)
                                         onActivated: function(index) {
                                             backend.setProfileMapping(
                                                 selectedProfile,
@@ -886,7 +914,7 @@ Item {
                                         textRole: "label"
                                         Material.accent: theme.accent
                                         font { family: uiState.fontFamily; pixelSize: 11 }
-                                        currentIndex: actionIndexForId(actionFor_id("gesture_up"))
+                                        currentIndex: actionIndexForId(gestureUpActionId)
                                         onActivated: function(index) {
                                             backend.setProfileMapping(
                                                 selectedProfile,
@@ -913,7 +941,7 @@ Item {
                                         textRole: "label"
                                         Material.accent: theme.accent
                                         font { family: uiState.fontFamily; pixelSize: 11 }
-                                        currentIndex: actionIndexForId(actionFor_id("gesture_down"))
+                                        currentIndex: actionIndexForId(gestureDownActionId)
                                         onActivated: function(index) {
                                             backend.setProfileMapping(
                                                 selectedProfile,
