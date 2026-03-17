@@ -208,15 +208,15 @@ The output is in `dist\Mouser\`. Zip that entire folder and distribute it.
 ┌────────────────┐     ┌──────────┐     ┌────────────────┐
 │ Logitech mouse │────▶│ Mouse    │────▶│ Engine         │
 │ / HID++ device │     │ Hook     │     │ (orchestrator) │
-└────────────────┘     └────▲─────┘     └───────┬────────┘
-                         │                   │
-                    block/pass          ┌────▼────────┐
-                         │              │ Key         │
-┌─────────────┐     ┌────┴─────┐        │ Simulator   │
+└────────────────┘     └──────────┘     └───────┬────────┘
+                         ▲                    │
+                    block/pass           ┌────▼────────┐
+                                         │ Key         │
+┌─────────────┐     ┌──────────┐        │ Simulator   │
 │ QML UI      │◀───▶│ Backend  │        │ (SendInput) │
 │ (PySide6)   │     │ (QObject)│        └─────────────┘
-└─────────────┘     └────▲─────┘
-                         │
+└─────────────┘     └──────────┘
+                         ▲
                     ┌────┴────────┐
                     │ App         │
                     │ Detector    │
