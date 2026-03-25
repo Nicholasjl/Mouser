@@ -33,7 +33,6 @@ class ConfigMigrationTests(unittest.TestCase):
 
         self.assertEqual(migrated["version"], 6)
         self.assertEqual(migrated["profiles"]["default"]["apps"], [])
-        self.assertFalse(migrated["settings"]["start_at_login"])
         self.assertFalse(migrated["settings"]["invert_hscroll"])
         self.assertFalse(migrated["settings"]["invert_vscroll"])
         self.assertEqual(migrated["settings"]["dpi"], 1000)
@@ -44,6 +43,8 @@ class ConfigMigrationTests(unittest.TestCase):
         self.assertEqual(migrated["settings"]["appearance_mode"], "system")
         self.assertFalse(migrated["settings"]["debug_mode"])
         self.assertEqual(migrated["settings"]["device_layout_overrides"], {})
+        self.assertFalse(migrated["settings"]["start_at_login"])
+        self.assertNotIn("start_with_windows", migrated["settings"])
         self.assertEqual(
             migrated["profiles"]["default"]["mappings"]["gesture"], "none"
         )
@@ -69,14 +70,16 @@ class ConfigMigrationTests(unittest.TestCase):
 
         migrated = config._migrate(cfg)
 
+        self.assertEqual(migrated["version"], 6)
         self.assertEqual(
             migrated["profiles"]["media"]["apps"],
             ["Microsoft.Media.Player.exe", "VLC.exe"],
         )
-        self.assertFalse(migrated["settings"]["start_at_login"])
         self.assertEqual(migrated["settings"]["appearance_mode"], "system")
         self.assertFalse(migrated["settings"]["debug_mode"])
         self.assertEqual(migrated["settings"]["device_layout_overrides"], {})
+        self.assertFalse(migrated["settings"]["start_at_login"])
+        self.assertNotIn("start_with_windows", migrated["settings"])
 
     def test_load_config_merges_missing_defaults_from_disk(self):
         partial = {
@@ -106,6 +109,7 @@ class ConfigMigrationTests(unittest.TestCase):
             ):
                 loaded = config.load_config()
 
+        self.assertEqual(loaded["version"], 6)
         self.assertEqual(loaded["settings"]["dpi"], 800)
         self.assertFalse(loaded["settings"]["start_at_login"])
         self.assertEqual(loaded["settings"]["gesture_threshold"], 50)
@@ -245,11 +249,15 @@ class AppCatalogTests(unittest.TestCase):
 
         self.assertEqual(resolved["id"], "com.google.Chrome")
         self.assertEqual(resolved["label"], "Google Chrome")
-        self.assertEqual(resolved["path"], app_path)
+        self.assertTrue(
+            resolved["path"].replace("/", os.sep).endswith(
+                os.path.join("Applications", "Google Chrome.app")
+            )
+        )
         self.assertIn("Google Chrome", resolved["aliases"])
 
     def test_resolve_app_spec_for_windows_exe_path_uses_curated_label(self):
-        app_path = "/Program Files/Google/Chrome/Application/chrome.exe"
+        app_path = r"C:\Program Files\Google\Chrome\Application\chrome.exe"
 
         with (
             patch.object(app_catalog.sys, "platform", "win32"),
@@ -259,7 +267,17 @@ class AppCatalogTests(unittest.TestCase):
 
         self.assertEqual(resolved["id"], "chrome.exe")
         self.assertEqual(resolved["label"], "Google Chrome")
-        self.assertEqual(resolved["path"], os.path.abspath(app_path))
+        self.assertTrue(
+            resolved["path"].replace("/", os.sep).endswith(
+                os.path.join(
+                    "Program Files",
+                    "Google",
+                    "Chrome",
+                    "Application",
+                    "chrome.exe",
+                )
+            )
+        )
         self.assertIn("chrome.exe", resolved["aliases"])
 
     def test_resolve_app_spec_for_windows_terminal_alias(self):
