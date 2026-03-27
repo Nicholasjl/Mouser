@@ -1097,13 +1097,18 @@ class HidGestureListener:
             mode_byte = p[0] if p else 0
             auto_disengage = p[1] if len(p) > 1 else 0
             print(f"[HidGesture] Smart Shift raw: mode=0x{mode_byte:02X} auto_disengage=0x{auto_disengage:02X}")
-            # auto_disengage 1-50 → SmartShift active with that threshold.
-            # 0 or ≥51 (e.g. 0xFF = always-ratchet written by us): SmartShift disabled.
+            # Freespin mode means fixed free-spin — SmartShift auto-switching is always OFF.
+            # The device preserves the auto_disengage byte in freespin state, so we must
+            # not use it to infer enabled=True; only ratchet mode can have SmartShift active.
+            # For ratchet: auto_disengage 1-50 → SmartShift active; 0 or ≥51 → disabled.
             mode = "freespin" if mode_byte == self.SMART_SHIFT_FREESPIN else "ratchet"
-            if self.SMART_SHIFT_THRESHOLD_MIN <= auto_disengage <= self.SMART_SHIFT_THRESHOLD_MAX:
-                result = {"mode": mode, "enabled": True, "threshold": auto_disengage}
+            if mode == "freespin":
+                threshold = auto_disengage if self.SMART_SHIFT_THRESHOLD_MIN <= auto_disengage <= self.SMART_SHIFT_THRESHOLD_MAX else 25
+                result = {"mode": "freespin", "enabled": False, "threshold": threshold}
+            elif self.SMART_SHIFT_THRESHOLD_MIN <= auto_disengage <= self.SMART_SHIFT_THRESHOLD_MAX:
+                result = {"mode": "ratchet", "enabled": True, "threshold": auto_disengage}
             else:
-                result = {"mode": mode, "enabled": False, "threshold": 25}
+                result = {"mode": "ratchet", "enabled": False, "threshold": 25}
             print(f"[HidGesture] Smart Shift state = {result}")
             self._smart_shift_result = result
         else:

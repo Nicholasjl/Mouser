@@ -160,6 +160,25 @@ class SmartShiftReadTests(unittest.TestCase):
         listener._apply_pending_read_smart_shift()
         self.assertEqual(listener._smart_shift_result["mode"], "freespin")
 
+    def test_freespin_with_in_range_auto_disengage_still_disabled(self):
+        """Device preserves auto_disengage=25 in freespin state; must not report enabled=True."""
+        listener = self._make_listener()
+        listener._request = Mock(return_value=self._mock_response(0x01, 25))
+        listener._apply_pending_read_smart_shift()
+        result = listener._smart_shift_result
+        self.assertEqual(result["mode"], "freespin")
+        self.assertFalse(result["enabled"])
+        self.assertEqual(result["threshold"], 25)
+
+    def test_freespin_with_any_auto_disengage_is_always_disabled(self):
+        """Regardless of auto_disengage value, freespin mode is never SmartShift-enabled."""
+        listener = self._make_listener()
+        for auto_dis in [1, 25, 50]:
+            listener._request = Mock(return_value=self._mock_response(0x01, auto_dis))
+            listener._apply_pending_read_smart_shift()
+            self.assertFalse(listener._smart_shift_result["enabled"],
+                             f"expected enabled=False for auto_disengage={auto_dis}")
+
     def test_mode_byte_0x02_parses_as_ratchet(self):
         listener = self._make_listener()
         listener._request = Mock(return_value=self._mock_response(0x02, 0xFF))
