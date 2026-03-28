@@ -467,13 +467,45 @@ class Engine:
         """Push persisted DPI and SmartShift settings to the device.
 
         Called at startup and on every reconnect (e.g. after waking from sleep).
-        Waits 3 s for the HID++ connection to settle, then writes saved settings.
-        Retries SmartShift once after 5 s if the first write fails — devices often
-        return IOReturnBadArgument for a few seconds immediately after wake because
-        the SMART_SHIFT_ENHANCED (0x2111) feature probe can transiently fail and fall
-        back to basic 0x2110, whose function IDs are rejected by the hardware.
+
+        SmartShift is written immediately (before any delay) so the scroll wheel
+        is in the correct mode as soon as possible — avoiding the window where the
+        device is in its firmware-default SmartShift state (typically enabled with a
+        low threshold).  The UI is also updated immediately with the saved state.
+
+        DPI and a second SmartShift write are sent after a 3 s settling delay.
+        The second write is important for enhanced SmartShift (0x2111) devices:
+        immediately after wake the feature probe can transiently fall back to basic
+        (0x2110) whose function IDs differ, so the first write may fail.  If both
+        writes fail, a final retry happens after another 5 s.
         """
-        time.sleep(3)  # let HID++ settle before sending commands
+        hg = self.hook._hid_gesture
+        if not hg:
+            return
+
+        s = self.cfg.get("settings", {})
+        ss_mode = s.get("smart_shift_mode", "ratchet")
+        ss_enabled = s.get("smart_shift_enabled", False)
+        ss_threshold = s.get("smart_shift_threshold", 25)
+
+        # ── immediate SmartShift write ────────────────────────────────────────
+        # Runs before the settling delay so the physical scroll wheel snaps to
+        # the saved mode within ~1 s of connect/wake (beats the first battery-
+        # poll SmartShift read at T+1 s).  May fail on enhanced-feature devices
+        # right after wake; the settled write below handles that case.
+        if hg.smart_shift_supported:
+            hg.set_smart_shift(ss_mode, ss_enabled, ss_threshold)
+            if self._smart_shift_read_cb:
+                try:
+                    self._smart_shift_read_cb({
+                        "mode": ss_mode,
+                        "enabled": ss_enabled,
+                        "threshold": ss_threshold,
+                    })
+                except Exception:
+                    pass
+
+        time.sleep(3)  # let HID++ settle before sending DPI and settled SS write
         hg = self.hook._hid_gesture
         if not hg:
             return
@@ -487,10 +519,6 @@ class Engine:
                 except Exception:
                     pass
 
-        s = self.cfg.get("settings", {})
-        ss_mode = s.get("smart_shift_mode", "ratchet")
-        ss_enabled = s.get("smart_shift_enabled", False)
-        ss_threshold = s.get("smart_shift_threshold", 25)
         if hg.smart_shift_supported:
             ok = hg.set_smart_shift(ss_mode, ss_enabled, ss_threshold)
             if not ok:
@@ -500,8 +528,9 @@ class Engine:
                 if hg and hg.smart_shift_supported:
                     ok = hg.set_smart_shift(ss_mode, ss_enabled, ss_threshold)
                     print(f"[Engine] SmartShift retry ({source}) -> {'OK' if ok else 'FAILED'}")
-            # Always push the saved/intended state to the UI so it doesn't show
-            # stale hardware state from the poll loop's first read after reconnect.
+            # Re-push saved state to UI after the settled write in case the
+            # battery-poll loop updated it with stale device state between the
+            # immediate write and now.
             if self._smart_shift_read_cb:
                 try:
                     self._smart_shift_read_cb({

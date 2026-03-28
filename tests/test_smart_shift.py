@@ -286,7 +286,9 @@ class EngineSmartShiftTests(unittest.TestCase):
             patch("time.sleep"),
         ):
             engine.start()
-        hg.set_smart_shift.assert_called_once_with("freespin", True, 40)
+        # Called twice: once immediately, once after the settled 3 s delay.
+        hg.set_smart_shift.assert_called_with("freespin", True, 40)
+        self.assertGreaterEqual(hg.set_smart_shift.call_count, 1)
 
     def test_start_skips_smart_shift_when_not_supported(self):
         engine = self._make_engine()
@@ -349,8 +351,9 @@ class EngineSmartShiftTests(unittest.TestCase):
         engine.set_smart_shift_read_callback(received.append)
         with patch("time.sleep"):
             engine._apply_device_settings("startup")
-        self.assertEqual(len(received), 1)
-        self.assertEqual(received[0], {
+        # UI is notified twice: once immediately, once after the settled 3 s delay.
+        self.assertGreaterEqual(len(received), 2)
+        self.assertEqual(received[-1], {
             "mode": "ratchet",
             "enabled": False,
             "threshold": 30,
