@@ -253,11 +253,11 @@ Item {
                 }
             }
 
-            Item { width: 1; height: 16; visible: backend.smartShiftSupported }
+            Item { width: 1; height: 16; visible: backend.smartShiftSupported && backend.deviceHasSmartShift }
 
             // ── Scroll Wheel Mode ─────────────────────────────────
             Rectangle {
-                visible: backend.smartShiftSupported
+                visible: backend.smartShiftSupported && backend.deviceHasSmartShift
                 width: parent.width - 72
                 anchors.horizontalCenter: parent.horizontalCenter
                 height: smartShiftContent.implicitHeight + 40

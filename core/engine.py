@@ -81,10 +81,29 @@ class Engine:
             timeout_ms=settings.get("gesture_timeout_ms", 3000),
             cooldown_ms=settings.get("gesture_cooldown_ms", 500),
         )
-        # Divert mode shift CID only when mapped to an action
-        self.hook.divert_mode_shift = any(
-            pdata.get("mappings", {}).get("mode_shift", "none") != "none"
-            for pdata in self.cfg.get("profiles", {}).values()
+        # Divert mode shift CID only when the device has the button and
+        # at least one profile maps it to an action.  When no device is
+        # connected yet, assume the button exists (safe: if the device
+        # turns out not to have it, the divert simply has no effect).
+        device = getattr(self, "connected_device", None)
+        device_buttons = getattr(device, "supported_buttons", None)
+        has_mode_shift = device_buttons is None or "mode_shift" in device_buttons
+        self.hook.divert_mode_shift = (
+            has_mode_shift
+            and any(
+                pdata.get("mappings", {}).get("mode_shift", "none") != "none"
+                for pdata in self.cfg.get("profiles", {}).values()
+            )
+        )
+
+        # Divert DPI switch CID (0x00FD) on MX Vertical when mapped.
+        has_dpi_switch = device_buttons is None or "dpi_switch" in device_buttons
+        self.hook.divert_dpi_switch = (
+            has_dpi_switch
+            and any(
+                pdata.get("mappings", {}).get("dpi_switch", "none") != "none"
+                for pdata in self.cfg.get("profiles", {}).values()
+            )
         )
 
         self._emit_mapping_snapshot("Hook mappings refreshed", mappings)
@@ -124,6 +143,8 @@ class Engine:
                     self._toggle_smart_shift()
                 elif action_id == "switch_scroll_mode":
                     self._switch_scroll_mode()
+                elif action_id == "cycle_dpi":
+                    self._cycle_dpi()
                 else:
                     execute_action(action_id)
         return handler
@@ -141,7 +162,7 @@ class Engine:
         new_enabled = not settings.get("smart_shift_enabled", False)
         mode = settings.get("smart_shift_mode", "ratchet")
         threshold = settings.get("smart_shift_threshold", 25)
-        print(f"[Engine] toggle_smart_shift → enabled={new_enabled}")
+        print(f"[Engine] toggle_smart_shift -> enabled={new_enabled}")
         settings["smart_shift_enabled"] = new_enabled
         save_config(self.cfg)
         if self._smart_shift_read_cb:
@@ -166,7 +187,7 @@ class Engine:
         current_mode = settings.get("smart_shift_mode", "ratchet")
         new_mode = "freespin" if current_mode == "ratchet" else "ratchet"
         threshold = settings.get("smart_shift_threshold", 25)
-        print(f"[Engine] switch_scroll_mode → {new_mode}")
+        print(f"[Engine] switch_scroll_mode -> {new_mode}")
         settings["smart_shift_mode"] = new_mode
         settings["smart_shift_enabled"] = False
         save_config(self.cfg)
@@ -181,6 +202,40 @@ class Engine:
                 ok = hg.set_smart_shift(new_mode, False, threshold)
                 print(f"[Engine] switch_scroll_mode device write -> {'OK' if ok else 'FAILED'}")
             threading.Thread(target=_write, daemon=True, name="SwitchScrollMode").start()
+
+    _DEFAULT_DPI_PRESETS = [800, 1200, 1600, 2400]
+
+    def _cycle_dpi(self):
+        """Cycle through user-configured DPI presets.
+
+        Advances to the next preset in the list.  If the current DPI doesn't
+        match any preset, jumps to the first one.  Updates config, notifies
+        the UI, and writes to the device off-thread.
+        """
+        settings = self.cfg.setdefault("settings", {})
+        presets = settings.get("dpi_presets") or list(self._DEFAULT_DPI_PRESETS)
+        if not presets:
+            return
+        current_dpi = settings.get("dpi", 1000)
+        try:
+            idx = presets.index(current_dpi)
+            next_idx = (idx + 1) % len(presets)
+        except ValueError:
+            next_idx = 0
+        new_dpi = clamp_dpi(presets[next_idx], self.connected_device)
+        print(f"[Engine] cycle_dpi {current_dpi} -> {new_dpi} (preset {next_idx + 1}/{len(presets)})")
+        settings["dpi"] = new_dpi
+        save_config(self.cfg)
+        if self._dpi_read_cb:
+            try:
+                self._dpi_read_cb(new_dpi)
+            except Exception:
+                pass
+        hg = self.hook._hid_gesture
+        if hg:
+            def _write():
+                hg.set_dpi(new_dpi)
+            threading.Thread(target=_write, daemon=True, name="CycleDPI").start()
 
     def _make_hscroll_handler(self, action_id):
         def handler(event):
@@ -404,6 +459,9 @@ class Engine:
     @property
     def connected_device(self):
         return getattr(self.hook, "connected_device", None)
+
+    def dump_device_info(self):
+        return getattr(self.hook, "dump_device_info", lambda: None)()
 
     @property
     def enabled(self):

@@ -396,6 +396,11 @@ if sys.platform == "win32":
             "keys": [],               # handled by Engine, not key_simulator
             "category": "Scroll",
         },
+        "cycle_dpi": {
+            "label": "Cycle DPI Presets",
+            "keys": [],               # handled by Engine, not key_simulator
+            "category": "Scroll",
+        },
         "none": {
             "label": "Do Nothing (Pass-through)",
             "keys": [],
@@ -867,6 +872,11 @@ elif sys.platform == "darwin":
             "keys": [],               # handled by Engine, not key_simulator
             "category": "Scroll",
         },
+        "cycle_dpi": {
+            "label": "Cycle DPI Presets",
+            "keys": [],               # handled by Engine, not key_simulator
+            "category": "Scroll",
+        },
         "none": {
             "label": "Do Nothing (Pass-through)",
             "keys": [],
@@ -1200,6 +1210,11 @@ elif sys.platform == "linux":
             "keys": [],               # handled by Engine, not key_simulator
             "category": "Scroll",
         },
+        "cycle_dpi": {
+            "label": "Cycle DPI Presets",
+            "keys": [],               # handled by Engine, not key_simulator
+            "category": "Scroll",
+        },
         "none": {
             "label": "Do Nothing (Pass-through)",
             "keys": [],
@@ -1262,6 +1277,11 @@ else:
         },
         "toggle_smart_shift": {
             "label": "Toggle SmartShift",
+            "keys": [],               # handled by Engine, not key_simulator
+            "category": "Scroll",
+        },
+        "cycle_dpi": {
+            "label": "Cycle DPI Presets",
             "keys": [],               # handled by Engine, not key_simulator
             "category": "Scroll",
         },

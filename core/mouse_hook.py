@@ -39,6 +39,8 @@ class MouseEvent:
     HSCROLL_RIGHT = "hscroll_right"
     MODE_SHIFT_DOWN = "mode_shift_down"
     MODE_SHIFT_UP = "mode_shift_up"
+    DPI_SWITCH_DOWN = "dpi_switch_down"
+    DPI_SWITCH_UP = "dpi_switch_up"
 
     def __init__(self, event_type, raw_data=None):
         self.event_type = event_type
@@ -247,6 +249,7 @@ if sys.platform == "win32":
             self._ri_hwnd = None
             self._device_name_cache = {}
             self.divert_mode_shift = False
+            self.divert_dpi_switch = False
             self._gesture_active = False
             self._prev_raw_buttons = {}
             self._hid_gesture = None
@@ -306,6 +309,12 @@ if sys.platform == "win32":
         @property
         def connected_device(self):
             return self._connected_device
+
+        def dump_device_info(self):
+            hg = getattr(self, "_hid_gesture", None)
+            if hg and hasattr(hg, "dump_device_info"):
+                return hg.dump_device_info()
+            return None
 
         def _set_device_connected(self, connected):
             if connected == self._device_connected:
@@ -844,6 +853,14 @@ if sys.platform == "win32":
             self._emit_debug("HID mode shift button up")
             self._dispatch(MouseEvent(MouseEvent.MODE_SHIFT_UP))
 
+        def _on_hid_dpi_switch_down(self):
+            self._emit_debug("HID DPI switch button down")
+            self._dispatch(MouseEvent(MouseEvent.DPI_SWITCH_DOWN))
+
+        def _on_hid_dpi_switch_up(self):
+            self._emit_debug("HID DPI switch button up")
+            self._dispatch(MouseEvent(MouseEvent.DPI_SWITCH_UP))
+
         def _on_hid_gesture_move(self, delta_x, delta_y):
             self._emit_debug(
                 f"HID rawxy move dx={delta_x} dy={delta_y}"
@@ -885,6 +902,11 @@ if sys.platform == "win32":
                     extra[0x00C4] = {
                         "on_down": self._on_hid_mode_shift_down,
                         "on_up": self._on_hid_mode_shift_up,
+                    }
+                if self.divert_dpi_switch:
+                    extra[0x00FD] = {
+                        "on_down": self._on_hid_dpi_switch_down,
+                        "on_up": self._on_hid_dpi_switch_up,
                     }
                 listener = HidGestureListener(
                     on_down=self._on_hid_gesture_down,
@@ -964,6 +986,7 @@ elif sys.platform == "darwin":
             self._device_connected = False
             self._connection_change_cb = None
             self.divert_mode_shift = False
+            self.divert_dpi_switch = False
             self._gesture_direction_enabled = False
             self._gesture_threshold = 50.0
             self._gesture_deadzone = 40.0
@@ -1013,6 +1036,12 @@ elif sys.platform == "darwin":
         @property
         def connected_device(self):
             return self._connected_device
+
+        def dump_device_info(self):
+            hg = getattr(self, "_hid_gesture", None)
+            if hg and hasattr(hg, "dump_device_info"):
+                return hg.dump_device_info()
+            return None
 
         def _set_device_connected(self, connected):
             if connected == self._device_connected:
@@ -1455,6 +1484,14 @@ elif sys.platform == "darwin":
             self._emit_debug("HID mode shift button up")
             self._dispatch(MouseEvent(MouseEvent.MODE_SHIFT_UP))
 
+        def _on_hid_dpi_switch_down(self):
+            self._emit_debug("HID DPI switch button down")
+            self._dispatch(MouseEvent(MouseEvent.DPI_SWITCH_DOWN))
+
+        def _on_hid_dpi_switch_up(self):
+            self._emit_debug("HID DPI switch button up")
+            self._dispatch(MouseEvent(MouseEvent.DPI_SWITCH_UP))
+
         def _on_hid_gesture_move(self, delta_x, delta_y):
             self._emit_debug(
                 f"HID rawxy move dx={delta_x} dy={delta_y}"
@@ -1581,6 +1618,11 @@ elif sys.platform == "darwin":
                         "on_down": self._on_hid_mode_shift_down,
                         "on_up": self._on_hid_mode_shift_up,
                     }
+                if self.divert_dpi_switch:
+                    extra[0x00FD] = {
+                        "on_down": self._on_hid_dpi_switch_down,
+                        "on_up": self._on_hid_dpi_switch_up,
+                    }
                 listener = HidGestureListener(
                     on_down=self._on_hid_gesture_down,
                     on_up=self._on_hid_gesture_up,
@@ -1660,6 +1702,7 @@ elif sys.platform == "linux":
             self._connection_change_cb = None
             self._connected_device = None
             self.divert_mode_shift = False
+            self.divert_dpi_switch = False
             self._gesture_direction_enabled = False
             self._gesture_threshold = 50.0
             self._gesture_deadzone = 40.0
@@ -1717,6 +1760,12 @@ elif sys.platform == "linux":
         @property
         def connected_device(self):
             return self._connected_device
+
+        def dump_device_info(self):
+            hg = getattr(self, "_hid_gesture", None)
+            if hg and hasattr(hg, "dump_device_info"):
+                return hg.dump_device_info()
+            return None
 
         def _set_device_connected(self, connected):
             if connected == self._device_connected:
@@ -1973,6 +2022,14 @@ elif sys.platform == "linux":
         def _on_hid_mode_shift_up(self):
             self._emit_debug("HID mode shift button up")
             self._dispatch(MouseEvent(MouseEvent.MODE_SHIFT_UP))
+
+        def _on_hid_dpi_switch_down(self):
+            self._emit_debug("HID DPI switch button down")
+            self._dispatch(MouseEvent(MouseEvent.DPI_SWITCH_DOWN))
+
+        def _on_hid_dpi_switch_up(self):
+            self._emit_debug("HID DPI switch button up")
+            self._dispatch(MouseEvent(MouseEvent.DPI_SWITCH_UP))
 
         def _on_hid_gesture_move(self, delta_x, delta_y):
             self._emit_debug(
@@ -2256,6 +2313,11 @@ elif sys.platform == "linux":
                         "on_down": self._on_hid_mode_shift_down,
                         "on_up": self._on_hid_mode_shift_up,
                     }
+                if self.divert_dpi_switch:
+                    extra[0x00FD] = {
+                        "on_down": self._on_hid_dpi_switch_down,
+                        "on_up": self._on_hid_dpi_switch_up,
+                    }
                 listener = HidGestureListener(
                     on_down=self._on_hid_gesture_down,
                     on_up=self._on_hid_gesture_up,
@@ -2312,6 +2374,7 @@ else:
             self._gesture_callback = None
             self._connected_device = None
             self.divert_mode_shift = False
+            self.divert_dpi_switch = False
             print(f"[MouseHook] Platform \'{sys.platform}\' not supported")
 
         def register(self, event_type, callback): pass
@@ -2327,5 +2390,6 @@ else:
         def device_connected(self): return False
         @property
         def connected_device(self): return None
+        def dump_device_info(self): return None
         def start(self): pass
         def stop(self): pass

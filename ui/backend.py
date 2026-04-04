@@ -8,7 +8,7 @@ import re
 import sys
 import time
 
-from PySide6.QtCore import QObject, Property, Signal, Slot, Qt
+from PySide6.QtCore import QMetaObject, QObject, Property, Signal, Slot, Qt
 
 from core.accessibility import is_process_trusted
 from core.config import (
@@ -18,7 +18,9 @@ from core.config import (
 )
 from core import app_catalog
 from core.device_layouts import get_device_layout, get_manual_layout_choices
-from core.logi_devices import DEFAULT_DPI_MAX, DEFAULT_DPI_MIN, clamp_dpi
+from core.logi_devices import (
+    DEFAULT_DPI_MAX, DEFAULT_DPI_MIN, clamp_dpi, get_buttons_for_layout,
+)
 from core.key_simulator import ACTIONS, custom_action_label, valid_custom_key_names
 from core.startup import (
     apply_login_startup,
@@ -61,7 +63,7 @@ class Backend(QObject):
     _batteryChangeRequest = Signal(int)
     _debugMessageRequest = Signal(str)
     _gestureEventRequest = Signal(object)
-    _smartShiftReadRequest = Signal(object)
+    _smartShiftReadRequest = Signal()
 
     def __init__(self, engine=None, parent=None):
         super().__init__(parent)
@@ -88,6 +90,8 @@ class Backend(QObject):
         self._gesture_move_dy = 0
         self._gesture_status = "Idle"
         self._current_attempt = None
+        self._pending_smart_shift_state = None  # thread-safe staging area
+        self._effective_supported_buttons = None  # set by _apply_device_layout
 
         # Cross-thread signal connections
         self._profileSwitchRequest.connect(
@@ -134,24 +138,41 @@ class Backend(QObject):
 
     @Property(list, notify=mappingsChanged)
     def buttons(self):
-        """List of button dicts for the active profile."""
+        """List of button dicts for the active profile, filtered by device."""
         mappings = get_active_mappings(self._cfg)
+        device_buttons = set(
+            self._effective_supported_buttons or BUTTON_NAMES.keys()
+        )
         result = []
-        for i, (key, name) in enumerate(BUTTON_NAMES.items()):
+        idx = 0
+        for key, name in BUTTON_NAMES.items():
+            if key not in device_buttons:
+                continue
             aid = mappings.get(key, "none")
+            idx += 1
             result.append({
                 "key": key,
                 "name": name,
                 "actionId": aid,
                 "actionLabel": _action_label(aid),
-                "index": i + 1,
+                "index": idx,
             })
         return result
 
-    @Property(list, constant=True)
+    def _hidden_actions(self):
+        """Return set of action IDs to hide based on effective device buttons."""
+        btns = self._effective_supported_buttons
+        hidden = set()
+        if btns and "mode_shift" not in btns:
+            hidden.add("toggle_smart_shift")
+            hidden.add("switch_scroll_mode")
+        return hidden
+
+    @Property(list, notify=deviceLayoutChanged)
     def actionCategories(self):
-        """Actions grouped by category — for the action picker chips."""
+        """Actions grouped by category, filtered by device capabilities."""
         from collections import OrderedDict
+        hidden = self._hidden_actions()
         cats = OrderedDict()
         for aid in sorted(
             ACTIONS,
@@ -160,6 +181,8 @@ class Backend(QObject):
                 ACTIONS[a]["label"],
             ),
         ):
+            if aid in hidden:
+                continue
             data = ACTIONS[aid]
             cat = data["category"]
             cats.setdefault(cat, []).append({"id": aid, "label": data["label"]})
@@ -169,9 +192,10 @@ class Backend(QObject):
         ]})
         return result
 
-    @Property(list, constant=True)
+    @Property(list, notify=deviceLayoutChanged)
     def allActions(self):
-        """Flat sorted action list (Do Nothing first) — for ComboBoxes."""
+        """Flat sorted action list (Do Nothing first), filtered by device."""
+        hidden = self._hidden_actions()
         result = []
         none_data = ACTIONS.get("none")
         if none_data:
@@ -181,7 +205,7 @@ class Backend(QObject):
             ACTIONS,
             key=lambda a: (ACTIONS[a]["category"], ACTIONS[a]["label"]),
         ):
-            if aid == "none":
+            if aid == "none" or aid in hidden:
                 continue
             data = ACTIONS[aid]
             result.append({"id": aid, "label": data["label"],
@@ -199,6 +223,32 @@ class Backend(QObject):
     def dpi(self):
         return self._cfg.get("settings", {}).get("dpi", 1000)
 
+    _DEFAULT_DPI_PRESETS = [800, 1200, 1600, 2400]
+
+    @Property(list, notify=settingsChanged)
+    def dpiPresets(self):
+        return self._cfg.get("settings", {}).get(
+            "dpi_presets", list(self._DEFAULT_DPI_PRESETS)
+        )
+
+    @Slot(int, int)
+    def setDpiPreset(self, index, value):
+        """Set a single DPI preset slot (0-3) to *value*."""
+        device = getattr(self._engine, "connected_device", None) if self._engine else None
+        clamped = clamp_dpi(value, device)
+        presets = list(self._cfg.get("settings", {}).get(
+            "dpi_presets", list(self._DEFAULT_DPI_PRESETS)
+        ))
+        while len(presets) < 4:
+            presets.append(self._DEFAULT_DPI_PRESETS[len(presets) % 4])
+        if 0 <= index < len(presets):
+            presets[index] = clamped
+        self._cfg.setdefault("settings", {})["dpi_presets"] = presets
+        save_config(self._cfg)
+        if self._engine:
+            self._engine.cfg = self._cfg
+        self.settingsChanged.emit()
+
     @Property(str, notify=smartShiftChanged)
     def smartShiftMode(self):
         return self._cfg.get("settings", {}).get("smart_shift_mode", "ratchet")
@@ -214,6 +264,12 @@ class Backend(QObject):
     @Property(bool, notify=mouseConnectedChanged)
     def smartShiftSupported(self):
         return self._engine.smart_shift_supported if self._engine else False
+
+    @Property(bool, notify=deviceLayoutChanged)
+    def deviceHasSmartShift(self):
+        """Whether the effective device has a mode_shift button (SmartShift)."""
+        btns = self._effective_supported_buttons
+        return btns is None or "mode_shift" in btns
 
     @Property(bool, notify=settingsChanged)
     def startMinimized(self):
@@ -691,12 +747,17 @@ class Backend(QObject):
 
     @Slot(str, result=list)
     def getProfileMappings(self, profileName):
-        """Return button mappings for a specific profile."""
+        """Return button mappings for a specific profile, filtered by device."""
         profiles = self._cfg.get("profiles", {})
         pdata = profiles.get(profileName, {})
         mappings = pdata.get("mappings", {})
+        device_buttons = set(
+            self._effective_supported_buttons or PROFILE_BUTTON_NAMES.keys()
+        )
         result = []
         for key, name in PROFILE_BUTTON_NAMES.items():
+            if key not in device_buttons:
+                continue
             aid = mappings.get(key, "none")
             result.append({
                 "key": key,
@@ -709,6 +770,25 @@ class Backend(QObject):
     @Slot(str, result=str)
     def actionLabelFor(self, actionId):
         return _action_label(actionId)
+
+    @Slot(result=str)
+    def dumpDeviceInfo(self):
+        """Return JSON describing the connected device for contributor use."""
+        import json
+        if not self._engine:
+            return ""
+        info = self._engine.dump_device_info()
+        if not info:
+            return ""
+        return json.dumps(info, indent=2)
+
+    @Slot(str)
+    def copyToClipboard(self, text):
+        """Copy text to the system clipboard."""
+        from PySide6.QtGui import QGuiApplication
+        clipboard = QGuiApplication.clipboard()
+        if clipboard:
+            clipboard.setText(text)
 
     @Slot(str)
     def setDeviceLayoutOverride(self, layoutKey):
@@ -766,17 +846,31 @@ class Backend(QObject):
         self._gestureEventRequest.emit(event)
 
     def _onEngineSmartShiftRead(self, state):
-        """Called from engine thread — posts to Qt main thread."""
-        self._smartShiftReadRequest.emit(state)
+        """Called from engine/hook thread — posts to Qt main thread.
 
-    @Slot(object)
-    def _handleSmartShiftRead(self, state):
+        Uses QMetaObject.invokeMethod instead of a signal because the call may
+        originate on the Windows LL hook thread, whose message pump context can
+        prevent PySide6 signal queuing from working reliably.
+        """
+        self._pending_smart_shift_state = state
+        QMetaObject.invokeMethod(
+            self, "_handleSmartShiftRead", Qt.QueuedConnection
+        )
+
+    @Slot()
+    def _handleSmartShiftRead(self):
         """Runs on Qt main thread — updates config and notifies QML."""
+        state = self._pending_smart_shift_state
         if isinstance(state, dict):
             settings = self._cfg.setdefault("settings", {})
             settings["smart_shift_mode"] = state.get("mode", "ratchet")
             settings["smart_shift_enabled"] = state.get("enabled", False)
-            settings["smart_shift_threshold"] = state.get("threshold", 25)
+            # Only accept the device-reported threshold when SmartShift is
+            # enabled (device returns the real value 1-50).  When disabled the
+            # device returns 0xFF which the read code maps to a hardcoded 25,
+            # overwriting whatever the user chose in the UI.
+            if state.get("enabled", False):
+                settings["smart_shift_threshold"] = state.get("threshold", 25)
         self.smartShiftChanged.emit()
 
     @Slot(str)
@@ -858,6 +952,22 @@ class Backend(QObject):
             self._device_layout = layout
             layout_changed = True
         if layout_changed:
+            self.deviceLayoutChanged.emit()
+
+        # Compute effective supported buttons (override wins over physical).
+        if override_key:
+            eff = get_buttons_for_layout(override_key)
+        else:
+            eff = getattr(device, "supported_buttons", None)
+        old_eff = self._effective_supported_buttons
+        self._effective_supported_buttons = eff
+
+        # Refresh button list -- different devices have different buttons.
+        if info_changed or layout_changed:
+            self.mappingsChanged.emit()
+
+        # If the effective button set changed, action lists may need updating.
+        if eff != old_eff:
             self.deviceLayoutChanged.emit()
 
     @Slot(int)

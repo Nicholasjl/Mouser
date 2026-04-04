@@ -497,6 +497,7 @@ KNOWN_CID_NAMES = {
     0x00C3: "Mouse Gesture Button",
     0x00C4: "Smart Shift",
     0x00D7: "Virtual Gesture Button",
+    0x00FD: "DPI Switch",
 }
 
 KEY_FLAG_BITS = (
@@ -604,6 +605,7 @@ class HidGestureListener:
         self._battery_result = None
         self._last_logged_battery = None
         self._connected_device_info = None
+        self._last_controls = []   # REPROG_V4 controls from last connection
 
     # ── public API ────────────────────────────────────────────────
 
@@ -635,6 +637,57 @@ class HidGestureListener:
     @property
     def connected_device(self):
         return self._connected_device_info
+
+    def dump_device_info(self):
+        """Return a dict describing everything we know about the connected device.
+
+        Intended for community contributors who want to submit device definitions.
+        Returns None when no device is connected.
+        """
+        dev = self._connected_device_info
+        if dev is None:
+            return None
+
+        features = {}
+        if self._feat_idx is not None:
+            features["REPROG_V4 (0x1B04)"] = f"index 0x{self._feat_idx:02X}"
+        if self._dpi_idx is not None:
+            features["ADJUSTABLE_DPI (0x2201)"] = f"index 0x{self._dpi_idx:02X}"
+        if self._smart_shift_idx is not None:
+            feat_name = ("SMART_SHIFT_ENHANCED (0x2111)"
+                         if self._smart_shift_enhanced
+                         else "SMART_SHIFT (0x2110)")
+            features[feat_name] = f"index 0x{self._smart_shift_idx:02X}"
+        if self._battery_idx is not None:
+            feat_name = (f"0x{self._battery_feature_id:04X}"
+                         if self._battery_feature_id else "unknown")
+            features[f"BATTERY ({feat_name})"] = f"index 0x{self._battery_idx:02X}"
+
+        controls = []
+        for c in self._last_controls:
+            controls.append({
+                "index": c["index"],
+                "cid": f"0x{c['cid']:04X}",
+                "task": f"0x{c['task']:04X}",
+                "flags": f"0x{c['flags']:04X}",
+                "mapped_to": f"0x{c['mapped_to']:04X}",
+                "mapping_flags": f"0x{c['mapping_flags']:04X}",
+            })
+
+        return {
+            "device_key": dev.key,
+            "display_name": dev.display_name,
+            "product_id": f"0x{dev.product_id:04X}" if dev.product_id else None,
+            "product_name": dev.product_name,
+            "transport": dev.transport,
+            "ui_layout": dev.ui_layout,
+            "supported_buttons": list(dev.supported_buttons),
+            "gesture_cids": [f"0x{c:04X}" for c in dev.gesture_cids],
+            "dpi_range": [dev.dpi_min, dev.dpi_max],
+            "discovered_features": features,
+            "reprog_controls": controls,
+            "gesture_candidates": [f"0x{c:04X}" for c in self._gesture_candidates],
+        }
 
     # ── device discovery ──────────────────────────────────────────
 
@@ -1362,6 +1415,7 @@ class HidGestureListener:
                     print(f"[HidGesture] Found REPROG_V4 @0x{fi:02X}  "
                           f"PID=0x{pid:04X} devIdx=0x{idx:02X}")
                     controls = self._discover_reprog_controls()
+                    self._last_controls = controls
                     self._gesture_candidates = self._choose_gesture_candidates(
                         controls,
                         device_spec=device_spec,

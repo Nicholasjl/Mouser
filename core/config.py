@@ -32,6 +32,7 @@ BUTTON_NAMES = {
     "hscroll_left":  "Horizontal scroll left",
     "hscroll_right": "Horizontal scroll right",
     "mode_shift":    "Mode shift button",
+    "dpi_switch":    "DPI switch button",
 }
 
 GESTURE_DIRECTION_BUTTONS = (
@@ -62,6 +63,7 @@ BUTTON_TO_EVENTS = {
     "hscroll_left":  ("hscroll_left",),
     "hscroll_right": ("hscroll_right",),
     "mode_shift":    ("mode_shift_down", "mode_shift_up"),
+    "dpi_switch":    ("dpi_switch_down", "dpi_switch_up"),
 }
 
 DEFAULT_CONFIG = {

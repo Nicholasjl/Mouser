@@ -891,6 +891,72 @@ Item {
                                     }
                                 }
                             }
+
+                            // Layout picker pill
+                            Rectangle {
+                                visible: backend.mouseConnected
+                                width: layoutPillRow.implicitWidth + 16
+                                height: 24; radius: 12
+                                anchors.verticalCenter: parent.verticalCenter
+                                color: layoutPillMa.containsMouse
+                                       ? Qt.rgba(0.5, 0.5, 0.5, 0.18)
+                                       : (backend.deviceLayoutOverrideKey !== ""
+                                          ? Qt.rgba(0.95, 0.7, 0.2, 0.18)
+                                          : Qt.rgba(0.5, 0.5, 0.5, 0.10))
+
+                                Row {
+                                    id: layoutPillRow
+                                    anchors.centerIn: parent
+                                    spacing: 4
+
+                                    Text {
+                                        text: {
+                                            if (backend.deviceLayoutOverrideKey !== "")
+                                                return currentLayoutChoiceLabel()
+                                            return backend.deviceDisplayName || "Auto"
+                                        }
+                                        font { family: uiState.fontFamily; pixelSize: 10 }
+                                        color: backend.deviceLayoutOverrideKey !== ""
+                                               ? "#d4a017" : theme.textSecondary
+                                        anchors.verticalCenter: parent.verticalCenter
+                                    }
+                                    Text {
+                                        text: "\u25BE"
+                                        font.pixelSize: 9
+                                        color: theme.textSecondary
+                                        anchors.verticalCenter: parent.verticalCenter
+                                    }
+                                }
+
+                                MouseArea {
+                                    id: layoutPillMa
+                                    anchors.fill: parent
+                                    hoverEnabled: true
+                                    cursorShape: Qt.PointingHandCursor
+                                    onClicked: layoutMenu.open()
+                                }
+
+                                Menu {
+                                    id: layoutMenu
+                                    y: parent.height + 4
+
+                                    Repeater {
+                                        model: backend.manualLayoutChoices
+                                        MenuItem {
+                                            text: {
+                                                var lbl = modelData.label || ""
+                                                return lbl === "Auto-detect"
+                                                       ? (s["mouse.auto_detect"] || lbl)
+                                                       : lbl
+                                            }
+                                            font { family: uiState.fontFamily; pixelSize: 11 }
+                                            highlighted: modelData.key === backend.deviceLayoutOverrideKey
+                                                         || (modelData.key === "" && backend.deviceLayoutOverrideKey === "")
+                                            onTriggered: backend.setDeviceLayoutOverride(modelData.key)
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
 
@@ -898,68 +964,6 @@ Item {
                         width: parent.width - 56; height: 1
                         color: theme.border
                         anchors.horizontalCenter: parent.horizontalCenter
-                    }
-
-                    Rectangle {
-                        visible: backend.mouseConnected
-                                 && (!backend.hasInteractiveDeviceLayout
-                                 || backend.deviceLayoutOverrideKey !== ""
-                                 )
-                        width: Math.min(parent.width - 56, 700)
-                        anchors.left: parent.left
-                        anchors.leftMargin: 28
-                        height: layoutModeCol.implicitHeight + 28
-                        radius: 14
-                        color: theme.bgCard
-                        border.width: 1
-                        border.color: theme.border
-
-                        Column {
-                            id: layoutModeCol
-                            anchors.fill: parent
-                            anchors.margins: 14
-                            spacing: 8
-
-                            Text {
-                                text: s["mouse.layout_mode"]
-                                font { family: uiState.fontFamily; pixelSize: 13; bold: true }
-                                color: theme.textPrimary
-                            }
-
-                            Text {
-                                width: parent.width
-                                wrapMode: Text.WordWrap
-                                text: backend.deviceLayoutOverrideKey !== ""
-                                      ? (s["mouse.experimental_override_prefix"] || "Experimental override active: ")
-                                        + currentLayoutChoiceLabel()
-                                        + (s["mouse.experimental_override_suffix"] || ". Switch back to Auto-detect if the hotspot map does not line up.")
-                                      : backend.deviceLayoutNote
-                                font { family: uiState.fontFamily; pixelSize: 11 }
-                                color: theme.textSecondary
-                            }
-
-                            ComboBox {
-                                id: layoutOverrideCombo
-                                width: Math.min(parent.width, 320)
-                                model: backend.manualLayoutChoices
-                                textRole: "label"
-                                delegate: layoutComboDelegate
-                                displayText: {
-                                    var lbl = currentText
-                                    return lbl === "Auto-detect"
-                                           ? (s["mouse.auto_detect"] || lbl)
-                                           : lbl
-                                }
-                                Material.accent: theme.accent
-                                font { family: uiState.fontFamily; pixelSize: 11 }
-                                currentIndex: manualLayoutChoiceIndex(backend.deviceLayoutOverrideKey)
-                                onActivated: function(index) {
-                                    backend.setDeviceLayoutOverride(
-                                        backend.manualLayoutChoices[index].key
-                                    )
-                                }
-                            }
-                        }
                     }
 
                     // ── Mouse image with hotspots ─────────────
@@ -1139,8 +1143,61 @@ Item {
                                     wrapMode: Text.WordWrap
                                     font { family: uiState.fontFamily; pixelSize: 12 }
                                     color: theme.textSecondary
+                                    visible: text !== ""
                                 }
 
+                                // Clickable button list for devices without an interactive overlay
+                                Repeater {
+                                    model: backend.buttons
+                                    delegate: Rectangle {
+                                        required property var modelData
+                                        width: fallbackCol.width
+                                        height: 40
+                                        radius: 10
+                                        color: selectedButton === modelData.key
+                                               ? Qt.rgba(theme.accent.r, theme.accent.g, theme.accent.b, 0.12)
+                                               : fbBtnArea.containsMouse
+                                                 ? Qt.rgba(theme.textPrimary.r, theme.textPrimary.g, theme.textPrimary.b, 0.06)
+                                                 : "transparent"
+                                        border.width: selectedButton === modelData.key ? 1 : 0
+                                        border.color: theme.accent
+
+                                        Row {
+                                            anchors.fill: parent
+                                            anchors.leftMargin: 12
+                                            anchors.rightMargin: 12
+                                            spacing: 8
+
+                                            Text {
+                                                text: lm.trButton(modelData.name)
+                                                width: parent.width * 0.45
+                                                anchors.verticalCenter: parent.verticalCenter
+                                                font { family: uiState.fontFamily; pixelSize: 13; bold: true }
+                                                color: selectedButton === modelData.key
+                                                       ? theme.accent : theme.textPrimary
+                                                elide: Text.ElideRight
+                                            }
+
+                                            Text {
+                                                text: lm.trAction(modelData.actionLabel)
+                                                width: parent.width * 0.55 - 8
+                                                anchors.verticalCenter: parent.verticalCenter
+                                                horizontalAlignment: Text.AlignRight
+                                                font { family: uiState.fontFamily; pixelSize: 12 }
+                                                color: theme.textSecondary
+                                                elide: Text.ElideRight
+                                            }
+                                        }
+
+                                        MouseArea {
+                                            id: fbBtnArea
+                                            anchors.fill: parent
+                                            hoverEnabled: true
+                                            cursorShape: Qt.PointingHandCursor
+                                            onClicked: selectButton(modelData.key)
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
@@ -1566,7 +1623,231 @@ Item {
                                 }
                             }
 
+                            // ── DPI Presets editor (when cycle_dpi is selected)
+                            Rectangle {
+                                id: dpiPresetsCard
+                                property int activeSlot: 0
+                                readonly property var slotColors: ["#e8d44d", "#5da5e8", "#e8943a", "#e05daa"]
+                                visible: selectedActionId === "cycle_dpi"
+                                width: parent.width
+                                height: dpiPresetsCol.implicitHeight + 28
+                                radius: 12
+                                color: Qt.rgba(0.5, 0.5, 0.5, 0.06)
+                                border.width: 1
+                                border.color: theme.border
+
+                                Column {
+                                    id: dpiPresetsCol
+                                    anchors {
+                                        left: parent.left; right: parent.right
+                                        top: parent.top; margins: 14
+                                    }
+                                    spacing: 14
+
+                                    Text {
+                                        text: "DPI PRESETS"
+                                        font { family: uiState.fontFamily; pixelSize: 11;
+                                               capitalization: Font.AllUppercase; letterSpacing: 1 }
+                                        color: theme.textDim
+                                    }
+
+                                    // Slot pills row
+                                    Row {
+                                        spacing: 10
+                                        Repeater {
+                                            model: 4
+                                            Rectangle {
+                                                width: slotVal.implicitWidth + 24
+                                                height: 32; radius: 8
+                                                color: dpiPresetsCard.activeSlot === index
+                                                       ? Qt.rgba(0.5, 0.5, 0.5, 0.14)
+                                                       : "transparent"
+                                                border.width: dpiPresetsCard.activeSlot === index ? 2 : 1
+                                                border.color: dpiPresetsCard.slotColors[index]
+
+                                                Text {
+                                                    id: slotVal
+                                                    anchors.centerIn: parent
+                                                    text: {
+                                                        var presets = backend.dpiPresets
+                                                        return presets[index] !== undefined ? presets[index] : "---"
+                                                    }
+                                                    font { family: uiState.fontFamily; pixelSize: 13; bold: true }
+                                                    color: dpiPresetsCard.slotColors[index]
+                                                }
+
+                                                // Active indicator dot
+                                                Rectangle {
+                                                    width: 5; height: 5; radius: 3
+                                                    anchors { horizontalCenter: parent.horizontalCenter; bottom: parent.bottom; bottomMargin: 2 }
+                                                    color: dpiPresetsCard.slotColors[index]
+                                                    visible: {
+                                                        var presets = backend.dpiPresets
+                                                        return presets[index] !== undefined && presets[index] === backend.dpi
+                                                    }
+                                                }
+
+                                                MouseArea {
+                                                    anchors.fill: parent
+                                                    cursorShape: Qt.PointingHandCursor
+                                                    onClicked: {
+                                                        dpiPresetsCard.activeSlot = index
+                                                        var presets = backend.dpiPresets
+                                                        if (presets[index] !== undefined)
+                                                            dpiPresetSlider.value = presets[index]
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    // Slider for active slot
+                                    Column {
+                                        width: parent.width
+                                        spacing: 6
+
+                                        Row {
+                                            spacing: 8
+                                            Rectangle {
+                                                width: 10; height: 10; radius: 5
+                                                color: dpiPresetsCard.slotColors[dpiPresetsCard.activeSlot]
+                                                anchors.verticalCenter: parent.verticalCenter
+                                            }
+                                            Text {
+                                                text: "Slot " + (dpiPresetsCard.activeSlot + 1) + ": "
+                                                      + Math.round(dpiPresetSlider.value) + " DPI"
+                                                font { family: uiState.fontFamily; pixelSize: 12; bold: true }
+                                                color: dpiPresetsCard.slotColors[dpiPresetsCard.activeSlot]
+                                            }
+                                        }
+
+                                        Slider {
+                                            id: dpiPresetSlider
+                                            width: parent.width
+                                            from: backend.deviceDpiMin
+                                            to: backend.deviceDpiMax
+                                            stepSize: 50
+                                            value: {
+                                                var presets = backend.dpiPresets
+                                                var idx = dpiPresetsCard.activeSlot
+                                                return presets[idx] !== undefined ? presets[idx] : 1000
+                                            }
+                                            Material.accent: dpiPresetsCard.slotColors[dpiPresetsCard.activeSlot]
+                                            onMoved: {
+                                                backend.setDpiPreset(dpiPresetsCard.activeSlot, Math.round(value))
+                                            }
+                                        }
+
+                                        Row {
+                                            width: parent.width
+                                            Text {
+                                                text: backend.deviceDpiMin
+                                                font { family: uiState.fontFamily; pixelSize: 10 }
+                                                color: theme.textDim
+                                            }
+                                            Item { width: parent.width - minDpiLabel.implicitWidth - maxDpiLabel.implicitWidth; height: 1 }
+                                            Text {
+                                                id: maxDpiLabel
+                                                text: backend.deviceDpiMax
+                                                font { family: uiState.fontFamily; pixelSize: 10 }
+                                                color: theme.textDim
+                                            }
+                                            Text {
+                                                id: minDpiLabel
+                                                visible: false
+                                                text: backend.deviceDpiMin
+                                            }
+                                        }
+                                    }
+
+                                    Text {
+                                        width: parent.width
+                                        wrapMode: Text.WordWrap
+                                        text: "Press the button to cycle: "
+                                              + (function() {
+                                                  var p = backend.dpiPresets
+                                                  var parts = []
+                                                  for (var i = 0; i < p.length; i++)
+                                                      parts.push(p[i])
+                                                  return parts.join(" \u2192 ")
+                                              })()
+                                        font { family: uiState.fontFamily; pixelSize: 11 }
+                                        color: theme.textSecondary
+                                    }
+                                }
+                            }
+
                             Item { width: 1; height: 8 }
+                        }
+                    }
+
+                    // ── Device info share card (always visible when connected)
+                    Rectangle {
+                        visible: backend.mouseConnected
+                        width: parent.width - 56
+                        anchors.horizontalCenter: parent.horizontalCenter
+                        height: shareDevRow.implicitHeight + 24
+                        radius: 14
+                        color: theme.bgCard
+                        border.width: 1
+                        border.color: theme.border
+
+                        Row {
+                            id: shareDevRow
+                            anchors.centerIn: parent
+                            spacing: 10
+
+                            Text {
+                                text: s["mouse.share_device_details"] || "Help us support your mouse"
+                                font { family: uiState.fontFamily; pixelSize: 12 }
+                                color: theme.textSecondary
+                                anchors.verticalCenter: parent.verticalCenter
+                            }
+
+                            Rectangle {
+                                width: shareDevBtnRow.implicitWidth + 20
+                                height: 30; radius: 10
+                                color: shareDevBtnMa.containsMouse
+                                       ? Qt.rgba(0, 0.83, 0.67, 0.22)
+                                       : Qt.rgba(0, 0.83, 0.67, 0.12)
+                                anchors.verticalCenter: parent.verticalCenter
+
+                                Row {
+                                    id: shareDevBtnRow
+                                    anchors.centerIn: parent
+                                    spacing: 6
+
+                                    Text {
+                                        text: "\uD83D\uDCCB"
+                                        font.pixelSize: 13
+                                        anchors.verticalCenter: parent.verticalCenter
+                                    }
+                                    Text {
+                                        text: s["mouse.copy_device_info"] || "Copy device info"
+                                        font { family: uiState.fontFamily; pixelSize: 11; bold: true }
+                                        color: theme.accent
+                                        anchors.verticalCenter: parent.verticalCenter
+                                    }
+                                }
+
+                                MouseArea {
+                                    id: shareDevBtnMa
+                                    anchors.fill: parent
+                                    hoverEnabled: true
+                                    cursorShape: Qt.PointingHandCursor
+                                    onClicked: {
+                                        var info = backend.dumpDeviceInfo()
+                                        if (info) {
+                                            backend.copyToClipboard(info)
+                                            backend.statusMessage(
+                                                s["mouse.device_info_copied"] || "Device info copied to clipboard -- paste it into a GitHub issue!")
+                                        } else {
+                                            backend.statusMessage(
+                                                s["mouse.no_device_connected"] || "No device connected")
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
 
@@ -1668,6 +1949,39 @@ Item {
                                         hoverEnabled: true
                                         cursorShape: Qt.PointingHandCursor
                                         onClicked: backend.clearGestureRecords()
+                                    }
+                                }
+
+                                Rectangle {
+                                    Layout.preferredWidth: copyDevInfoText.implicitWidth + 20
+                                    Layout.preferredHeight: 28
+                                    radius: 8
+                                    color: copyDevInfoMa.containsMouse
+                                           ? Qt.rgba(1, 1, 1, 0.08)
+                                           : Qt.rgba(1, 1, 1, 0.04)
+
+                                    Text {
+                                        id: copyDevInfoText
+                                        anchors.centerIn: parent
+                                        text: "Copy device info"
+                                        font { family: uiState.fontFamily; pixelSize: 11; bold: true }
+                                        color: theme.textPrimary
+                                    }
+
+                                    MouseArea {
+                                        id: copyDevInfoMa
+                                        anchors.fill: parent
+                                        hoverEnabled: true
+                                        cursorShape: Qt.PointingHandCursor
+                                        onClicked: {
+                                            var info = backend.dumpDeviceInfo()
+                                            if (info) {
+                                                backend.copyToClipboard(info)
+                                                backend.statusMessage("Device info copied to clipboard")
+                                            } else {
+                                                backend.statusMessage("No device connected")
+                                            }
+                                        }
                                     }
                                 }
                             }
