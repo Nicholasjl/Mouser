@@ -433,8 +433,9 @@ class BackendSmartShiftTests(unittest.TestCase):
     def test_handle_smart_shift_read_updates_in_memory_config(self):
         backend = self._make_backend()
         with patch("ui.backend.save_config") as save_mock:
-            # Simulate call from Qt main thread (no cross-thread signal needed in test)
-            backend._handleSmartShiftRead({"mode": "freespin", "enabled": True, "threshold": 35})
+            # Simulate the two-step cross-thread call: stage state, then invoke handler
+            backend._pending_smart_shift_state = {"mode": "freespin", "enabled": True, "threshold": 35}
+            backend._handleSmartShiftRead()
         # Hardware reads should NOT be persisted — user's explicit saves drive the file.
         save_mock.assert_not_called()
         self.assertEqual(backend._cfg["settings"]["smart_shift_mode"], "freespin")
@@ -444,7 +445,8 @@ class BackendSmartShiftTests(unittest.TestCase):
     def test_handle_smart_shift_read_ignores_non_dict(self):
         """None or unexpected types should not crash or corrupt config."""
         backend = self._make_backend({"smart_shift_mode": "ratchet"})
-        backend._handleSmartShiftRead(None)  # should not raise
+        backend._pending_smart_shift_state = None
+        backend._handleSmartShiftRead()  # should not raise
         self.assertEqual(backend._cfg["settings"]["smart_shift_mode"], "ratchet")
 
 
