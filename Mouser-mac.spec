@@ -82,7 +82,6 @@ a = Analysis(
         "PySide6.QtUiTools",
         "PySide6.QtXml",
         "PySide6.QtConcurrent",
-        "PySide6.QtDBus",
         "PySide6.QtStateMachine",
         "PySide6.QtHttpServer",
         "PySide6.QtSpatialAudio",
