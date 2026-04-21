@@ -578,6 +578,7 @@ if sys.platform == "win32":
 # ==================================================================
 
 elif sys.platform == "darwin":
+    _INJECTED_EVENT_MARKER = 0x4D4F5554
     import ctypes
 
     try:
@@ -661,6 +662,13 @@ elif sys.platform == "darwin":
         else:
             event = Quartz.CGEventCreateScrollWheelEvent(None, 0, 2, 0, delta)
         if event:
+            try:
+                # Mark synthetic scroll events so the CGEventTap can ignore them
+                Quartz.CGEventSetIntegerValueField(
+                    event, Quartz.kCGEventSourceUserData, _INJECTED_EVENT_MARKER
+                )
+            except Exception:
+                pass
             Quartz.CGEventPost(Quartz.kCGHIDEventTap, event)
 
     # Mouse button simulation
@@ -701,6 +709,13 @@ elif sys.platform == "darwin":
         loc = Quartz.CGEventGetLocation(Quartz.CGEventCreate(None))
         ev = Quartz.CGEventCreateMouseEvent(None, evt_type, loc, entry["button"])
         if ev:
+            try:
+                # Mark synthetic mouse events so the CGEventTap can ignore them
+                Quartz.CGEventSetIntegerValueField(
+                    ev, Quartz.kCGEventSourceUserData, _INJECTED_EVENT_MARKER
+                )
+            except Exception:
+                pass
             Quartz.CGEventPost(Quartz.kCGHIDEventTap, ev)
 
     def inject_mouse_down(action_id):
