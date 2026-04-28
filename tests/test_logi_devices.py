@@ -72,6 +72,26 @@ class LogiDeviceRegistryTests(unittest.TestCase):
         self.assertEqual(clamp_dpi(100, None), 200)
         self.assertEqual(clamp_dpi(9000, None), 8000)
 
+    def test_resolve_g_pro_2_lightspeed_variants(self):
+        for product_id in (0x40BD, 0xC0A8, 0xC09A):
+            with self.subTest(product_id=product_id):
+                device = resolve_device(product_id=product_id)
+                self.assertIsNotNone(device)
+                self.assertEqual(device.key, "g_pro_2_lightspeed")
+                self.assertIn("xbutton3", device.supported_buttons)
+                self.assertIn("xbutton4", device.supported_buttons)
+
+        for name in (
+            "G PRO X2 Lightspeed",
+            "PRO X2 Lightspeed",
+            "Logitech G PRO X2",
+            "PRO X2 SUPERSTRIKE",
+        ):
+            with self.subTest(name=name):
+                device = resolve_device(product_name=name)
+                self.assertIsNotNone(device)
+                self.assertEqual(device.key, "g_pro_2_lightspeed")
+
 
 if __name__ == "__main__":
     unittest.main()

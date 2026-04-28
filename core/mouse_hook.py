@@ -26,6 +26,10 @@ class MouseEvent:
     XBUTTON1_UP = "xbutton1_up"
     XBUTTON2_DOWN = "xbutton2_down"
     XBUTTON2_UP = "xbutton2_up"
+    XBUTTON3_DOWN = "xbutton3_down"
+    XBUTTON3_UP = "xbutton3_up"
+    XBUTTON4_DOWN = "xbutton4_down"
+    XBUTTON4_UP = "xbutton4_up"
     MIDDLE_DOWN = "middle_down"
     MIDDLE_UP = "middle_up"
     GESTURE_DOWN = "gesture_down"      # MX Master 3S gesture button
@@ -123,6 +127,10 @@ if sys.platform == "win32":
     RIDI_DEVICENAME = 0x20000007
     SW_HIDE = 0
     STANDARD_BUTTON_MASK = 0x1F
+    RI_MOUSE_BUTTON_4_DOWN = 0x0040
+    RI_MOUSE_BUTTON_4_UP = 0x0080
+    RI_MOUSE_BUTTON_5_DOWN = 0x0100
+    RI_MOUSE_BUTTON_5_UP = 0x0200
 
     class RAWINPUTDEVICE(Structure):
         _fields_ = [
@@ -222,6 +230,40 @@ if sys.platform == "win32":
     PostMessageW.argtypes = [wintypes.HWND, c_uint, wintypes.WPARAM, wintypes.LPARAM]
     PostMessageW.restype = wintypes.BOOL
 
+    _RAW_PROGRAMMABLE_BUTTONS = (
+        (0x08, MouseEvent.XBUTTON1_DOWN, MouseEvent.XBUTTON1_UP, "xbutton1"),
+        (0x10, MouseEvent.XBUTTON2_DOWN, MouseEvent.XBUTTON2_UP, "xbutton2"),
+        (0x20, MouseEvent.XBUTTON3_DOWN, MouseEvent.XBUTTON3_UP, "xbutton3"),
+        (0x40, MouseEvent.XBUTTON4_DOWN, MouseEvent.XBUTTON4_UP, "xbutton4"),
+        (0x80, MouseEvent.DPI_SWITCH_DOWN, MouseEvent.DPI_SWITCH_UP, "dpi_switch"),
+    )
+    _RAW_PROGRAMMABLE_BUTTON_MASK = 0x08 | 0x10 | 0x20 | 0x40 | 0x80
+    _HIDPP_MOUSE_BUTTON_SPY_BUTTONS = (
+        (0x0008, MouseEvent.XBUTTON1_DOWN, MouseEvent.XBUTTON1_UP, "xbutton1"),
+        (0x0010, MouseEvent.XBUTTON2_DOWN, MouseEvent.XBUTTON2_UP, "xbutton2"),
+        (0x0020, MouseEvent.XBUTTON3_DOWN, MouseEvent.XBUTTON3_UP, "xbutton3"),
+        (0x0040, MouseEvent.XBUTTON4_DOWN, MouseEvent.XBUTTON4_UP, "xbutton4"),
+        (0x0080, MouseEvent.DPI_SWITCH_DOWN, MouseEvent.DPI_SWITCH_UP, "dpi_switch"),
+        (0x2000, MouseEvent.DPI_SWITCH_DOWN, MouseEvent.DPI_SWITCH_UP, "dpi_switch"),
+    )
+    _HIDPP_MOUSE_BUTTON_SPY_MASK = (
+        0x0008 | 0x0010 | 0x0020 | 0x0040 | 0x0080 | 0x2000
+    )
+    _HIDPP_MOUSE_BUTTON_SPY_STANDARD_MASK = 0x0001 | 0x0002 | 0x0004
+    _CONSUMER_HID_BUTTONS = (
+        (0x00FD, MouseEvent.DPI_SWITCH_DOWN, MouseEvent.DPI_SWITCH_UP, "dpi_switch"),
+        (0x00C4, MouseEvent.MODE_SHIFT_DOWN, MouseEvent.MODE_SHIFT_UP, "mode_shift"),
+        (0x03F1, MouseEvent.XBUTTON3_DOWN, MouseEvent.XBUTTON3_UP, "xbutton3"),
+        (0x03F2, MouseEvent.XBUTTON4_DOWN, MouseEvent.XBUTTON4_UP, "xbutton4"),
+    )
+    _RAW_FLAG_BUTTONS = (
+        (RI_MOUSE_BUTTON_4_DOWN, MouseEvent.XBUTTON1_DOWN, "xbutton1"),
+        (RI_MOUSE_BUTTON_4_UP, MouseEvent.XBUTTON1_UP, "xbutton1"),
+        (RI_MOUSE_BUTTON_5_DOWN, MouseEvent.XBUTTON2_DOWN, "xbutton2"),
+        (RI_MOUSE_BUTTON_5_UP, MouseEvent.XBUTTON2_UP, "xbutton2"),
+    )
+    _LOW_LEVEL_RAW_DEDUP_WINDOW_S = 0.10
+
     class MouseHook:
         """
         Installs a low-level mouse hook on Windows to intercept
@@ -252,6 +294,8 @@ if sys.platform == "win32":
             self.divert_dpi_switch = False
             self._gesture_active = False
             self._prev_raw_buttons = {}
+            self._prev_hidpp_button_spy = {}
+            self._prev_consumer_usages = {}
             self._hid_gesture = None
             self._last_rehook_time = 0
             self._device_connected = False
@@ -274,6 +318,7 @@ if sys.platform == "win32":
             self._connected_device = None
             self._dispatch_queue = queue.Queue()
             self._dispatch_worker_thread = None
+            self._recent_event_dispatch = {}
 
         def register(self, event_type, callback):
             self._callbacks.setdefault(event_type, []).append(callback)
@@ -389,6 +434,23 @@ if sys.platform == "win32":
                     self._dispatch(event)
                 except Exception as e:
                     print(f"[MouseHook] dispatch worker error: {e}")
+
+        def _queue_mouse_event(self, event, source):
+            now = time.monotonic()
+            recent = self._recent_event_dispatch.get(event.event_type)
+            if (
+                recent
+                and recent[1] != source
+                and now - recent[0] < _LOW_LEVEL_RAW_DEDUP_WINDOW_S
+            ):
+                self._emit_debug(
+                    f"Drop duplicate {event.event_type} from {source}; "
+                    f"recent source={recent[1]}"
+                )
+                return False
+            self._recent_event_dispatch[event.event_type] = (now, source)
+            self._dispatch_queue.put(event)
+            return True
 
         def _gesture_cooldown_active(self):
             return time.monotonic() < self._gesture_cooldown_until
@@ -582,6 +644,12 @@ if sys.platform == "win32":
                     elif xbutton == XBUTTON2:
                         event = MouseEvent(MouseEvent.XBUTTON2_DOWN)
                         should_block = MouseEvent.XBUTTON2_DOWN in self._blocked_events
+                    elif xbutton == 3:
+                        event = MouseEvent(MouseEvent.XBUTTON3_DOWN)
+                        should_block = MouseEvent.XBUTTON3_DOWN in self._blocked_events
+                    elif xbutton >= 4:
+                        event = MouseEvent(MouseEvent.XBUTTON4_DOWN)
+                        should_block = MouseEvent.XBUTTON4_DOWN in self._blocked_events
 
                 elif wParam == WM_XBUTTONUP:
                     xbutton = hiword(mouse_data)
@@ -591,6 +659,12 @@ if sys.platform == "win32":
                     elif xbutton == XBUTTON2:
                         event = MouseEvent(MouseEvent.XBUTTON2_UP)
                         should_block = MouseEvent.XBUTTON2_UP in self._blocked_events
+                    elif xbutton == 3:
+                        event = MouseEvent(MouseEvent.XBUTTON3_UP)
+                        should_block = MouseEvent.XBUTTON3_UP in self._blocked_events
+                    elif xbutton >= 4:
+                        event = MouseEvent(MouseEvent.XBUTTON4_UP)
+                        should_block = MouseEvent.XBUTTON4_UP in self._blocked_events
 
                 elif wParam == WM_MBUTTONDOWN:
                     event = MouseEvent(MouseEvent.MIDDLE_DOWN)
@@ -638,7 +712,7 @@ if sys.platform == "win32":
                             self._emit_debug("Invert horizontal scroll skipped: raw input window unavailable")
 
                 if event:
-                    self._dispatch_queue.put(event)
+                    self._queue_mouse_event(event, "low_level")
                     if should_block:
                         return 1
 
@@ -710,15 +784,99 @@ if sys.platform == "win32":
             if not self._is_logitech(header.hDevice):
                 return
             if header.dwType == RIM_TYPEMOUSE:
-                self._check_raw_mouse_gesture(header.hDevice, buf)
+                self._check_raw_mouse_buttons(header.hDevice, buf)
+            elif header.dwType == RIM_TYPEHID:
+                self._check_raw_hid_buttons(header.hDevice, buf, sz.value)
 
-        def _check_raw_mouse_gesture(self, hDevice, buf):
-            if self._hid_gesture_available():
-                return
+        def _raw_programmable_buttons_enabled(self):
+            device = self.connected_device
+            if getattr(device, "key", "") == "g_pro_2_lightspeed":
+                return True
+            buttons = getattr(device, "supported_buttons", ()) or ()
+            if any(
+                key in buttons
+                for key in ("xbutton3", "xbutton4", "dpi_switch")
+            ):
+                return True
+            for _, down_event, up_event, label in _RAW_PROGRAMMABLE_BUTTONS:
+                if label in ("xbutton1", "xbutton2"):
+                    continue
+                if (
+                    down_event in self._callbacks
+                    or up_event in self._callbacks
+                    or down_event in self._blocked_events
+                    or up_event in self._blocked_events
+                ):
+                    return True
+            return False
+
+        def _queue_raw_programmable_button_events(self, raw_btns, prev_btns):
+            changed = (raw_btns ^ prev_btns) & _RAW_PROGRAMMABLE_BUTTON_MASK
+            if changed == 0:
+                return False
+
+            dispatched = False
+            for mask, down_event, up_event, label in _RAW_PROGRAMMABLE_BUTTONS:
+                if not (changed & mask):
+                    continue
+                pressed = bool(raw_btns & mask)
+                event_type = down_event if pressed else up_event
+                raw_data = {
+                    "source": "raw_input",
+                    "button": label,
+                    "raw_buttons": raw_btns,
+                    "mask": mask,
+                }
+                message = (
+                    f"Raw Input {label} {'down' if pressed else 'up'} "
+                    f"rawButtons=0x{raw_btns:X} mask=0x{mask:X}"
+                )
+                print(f"[MouseHook] {message}")
+                self._emit_debug(message)
+                self._queue_mouse_event(MouseEvent(event_type, raw_data), "raw_input")
+                dispatched = True
+            return dispatched
+
+        def _queue_raw_button_flag_events(self, button_flags):
+            if not button_flags:
+                return False
+
+            dispatched = False
+            for flag, event_type, label in _RAW_FLAG_BUTTONS:
+                if not (button_flags & flag):
+                    continue
+                raw_data = {
+                    "source": "raw_input_flags",
+                    "button": label,
+                    "button_flags": int(button_flags),
+                    "flag": flag,
+                }
+                message = (
+                    f"Raw Input {label} {event_type.rsplit('_', 1)[-1]} "
+                    f"buttonFlags=0x{int(button_flags):X} flag=0x{flag:X}"
+                )
+                print(f"[MouseHook] {message}")
+                self._emit_debug(message)
+                self._queue_mouse_event(MouseEvent(event_type, raw_data), "raw_input")
+                dispatched = True
+            return dispatched
+
+        def _check_raw_mouse_buttons(self, hDevice, buf):
             mouse = RAWMOUSE.from_buffer_copy(buf, sizeof(RAWINPUTHEADER))
-            raw_btns = mouse.ulRawButtons
+            if self._raw_programmable_buttons_enabled():
+                self._queue_raw_button_flag_events(mouse.usButtonFlags)
+            self._process_raw_mouse_button_state(hDevice, mouse.ulRawButtons)
+
+        def _process_raw_mouse_button_state(self, hDevice, raw_btns):
             prev_btns = self._prev_raw_buttons.get(hDevice, 0)
             self._prev_raw_buttons[hDevice] = raw_btns
+
+            if self._raw_programmable_buttons_enabled():
+                self._queue_raw_programmable_button_events(raw_btns, prev_btns)
+                return
+
+            if self._hid_gesture_available():
+                return
 
             extra_now = raw_btns & ~STANDARD_BUTTON_MASK
             extra_prev = prev_btns & ~STANDARD_BUTTON_MASK
@@ -735,6 +893,172 @@ if sys.platform == "win32":
                     self._gesture_active = False
                     print("[MouseHook] Gesture UP")
                     self._dispatch(MouseEvent(MouseEvent.GESTURE_CLICK))
+
+        def _check_raw_hid_buttons(self, hDevice, buf, buf_size):
+            hid = RAWHID.from_buffer_copy(buf, sizeof(RAWINPUTHEADER))
+            if hid.dwSizeHid == 0 or hid.dwCount == 0:
+                return
+
+            offset = sizeof(RAWINPUTHEADER) + sizeof(RAWHID)
+            total = int(hid.dwSizeHid) * int(hid.dwCount)
+            if offset + total > int(buf_size):
+                return
+
+            handled = False
+            for idx in range(int(hid.dwCount)):
+                start = offset + idx * int(hid.dwSizeHid)
+                end = start + int(hid.dwSizeHid)
+                report = bytes(buf[start:end])
+                handled = self._process_raw_hid_report(hDevice, report) or handled
+            return handled
+
+        def _process_raw_hid_report(self, hDevice, report):
+            if not report or not self._raw_programmable_buttons_enabled():
+                return False
+            if self._process_hidpp_mouse_button_spy_report(hDevice, report):
+                return True
+            return self._process_consumer_control_report(hDevice, report)
+
+        def _process_hidpp_mouse_button_spy_report(self, hDevice, report):
+            if len(report) < 6 or report[0] != 0x11:
+                return False
+
+            feat_idx = int(report[2])
+            func_sw = int(report[3])
+            listener = getattr(self, "_hid_gesture", None)
+            expected_idx = getattr(listener, "mouse_button_spy_index", None)
+            if expected_idx is not None and feat_idx != expected_idx:
+                return False
+            if expected_idx is None and feat_idx not in (0x0F, 0x10, 0x11):
+                return False
+
+            # MOUSE BUTTON SPY reports a big-endian 16-bit mouse-button mask
+            # in the first two parameter bytes.  On G PRO 2 this exposes the
+            # extra side buttons and DPI button that do not arrive as normal
+            # WM_XBUTTON messages.
+            button_mask = (int(report[4]) << 8) | int(report[5])
+            return self._queue_hidpp_mouse_button_spy_events(
+                hDevice, button_mask, feat_idx, func_sw
+            )
+
+        def _queue_hidpp_mouse_button_spy_events(
+            self, hDevice, button_mask, feat_idx=None, func_sw=None
+        ):
+            prev_mask = self._prev_hidpp_button_spy.get(hDevice, 0)
+            self._prev_hidpp_button_spy[hDevice] = button_mask
+            raw_changed = button_mask ^ prev_mask
+            changed = (button_mask ^ prev_mask) & _HIDPP_MOUSE_BUTTON_SPY_MASK
+            if changed == 0:
+                unknown_changed = raw_changed & ~(
+                    _HIDPP_MOUSE_BUTTON_SPY_STANDARD_MASK
+                    | _HIDPP_MOUSE_BUTTON_SPY_MASK
+                )
+                if unknown_changed:
+                    message = (
+                        "HID++ Button Spy unmapped "
+                        f"buttonMask=0x{button_mask:04X} "
+                        f"changed=0x{unknown_changed:04X}"
+                    )
+                    print(f"[MouseHook] {message}")
+                    self._emit_debug(message)
+                return False
+
+            dispatched = False
+            for mask, down_event, up_event, label in _HIDPP_MOUSE_BUTTON_SPY_BUTTONS:
+                if not (changed & mask):
+                    continue
+                pressed = bool(button_mask & mask)
+                event_type = down_event if pressed else up_event
+                raw_data = {
+                    "source": "hidpp_button_spy",
+                    "button": label,
+                    "button_mask": button_mask,
+                    "mask": mask,
+                }
+                if feat_idx is not None:
+                    raw_data["feature_index"] = feat_idx
+                if func_sw is not None:
+                    raw_data["func_sw"] = func_sw
+                message = (
+                    f"HID++ Button Spy {label} {'down' if pressed else 'up'} "
+                    f"buttonMask=0x{button_mask:04X} mask=0x{mask:04X}"
+                )
+                print(f"[MouseHook] {message}")
+                self._emit_debug(message)
+                self._queue_mouse_event(
+                    MouseEvent(event_type, raw_data), "hidpp_button_spy"
+                )
+                dispatched = True
+            return dispatched
+
+        def _on_hid_button_spy(self, button_mask, feat_idx=None, func_sw=None):
+            self._queue_hidpp_mouse_button_spy_events(
+                "hidpp_listener", button_mask, feat_idx, func_sw
+            )
+
+        def _process_consumer_control_report(self, hDevice, report):
+            if not report:
+                return False
+            if report[0] != 0x03:
+                return False
+
+            # Logitech consumer-control reports use report ID 0x03.  The
+            # factory DPI report uses little-endian usages, while onboard
+            # profile consumer bindings on G PRO 2 arrive big-endian.
+            offset = 1
+            known_usages = {
+                usage for usage, _down, _up, _label in _CONSUMER_HID_BUTTONS
+            }
+            usages = set()
+            for i in range(offset, len(report) - 1, 2):
+                le_usage = int(report[i]) | (int(report[i + 1]) << 8)
+                be_usage = (int(report[i]) << 8) | int(report[i + 1])
+                if le_usage in known_usages:
+                    usages.add(le_usage)
+                elif be_usage in known_usages:
+                    usages.add(be_usage)
+                elif le_usage:
+                    usages.add(le_usage)
+            if not usages and not self._prev_consumer_usages.get(hDevice):
+                return False
+
+            prev = self._prev_consumer_usages.get(hDevice, set())
+            self._prev_consumer_usages[hDevice] = usages
+            changed = usages ^ prev
+            if not changed:
+                return False
+
+            dispatched = False
+            handled_usages = set()
+            for usage, down_event, up_event, label in _CONSUMER_HID_BUTTONS:
+                if usage not in changed:
+                    continue
+                pressed = usage in usages
+                handled_usages.add(usage)
+                event_type = down_event if pressed else up_event
+                raw_data = {
+                    "source": "consumer_control",
+                    "button": label,
+                    "usage": usage,
+                    "usages": sorted(usages),
+                }
+                self._emit_debug(
+                    f"Consumer Control {label} {'down' if pressed else 'up'} "
+                    f"usage=0x{usage:04X}"
+                )
+                self._queue_mouse_event(
+                    MouseEvent(event_type, raw_data), "consumer_control"
+                )
+                dispatched = True
+            unknown = changed - handled_usages
+            if unknown:
+                message = (
+                    "Consumer Control unmapped usages="
+                    + ",".join(f"0x{usage:04X}" for usage in sorted(unknown))
+                )
+                print(f"[MouseHook] {message}")
+                self._emit_debug(message)
+            return dispatched
 
         def _setup_raw_input(self):
             hInst = GetModuleHandleW(None)
@@ -759,29 +1083,28 @@ if sys.platform == "win32":
 
             ShowWindow(self._ri_hwnd, SW_HIDE)
 
-            rid = (RAWINPUTDEVICE * 4)()
-            rid[0].usUsagePage = 0x01
-            rid[0].usUsage = 0x02
-            rid[0].dwFlags = RIDEV_INPUTSINK
-            rid[0].hwndTarget = self._ri_hwnd
-            rid[1].usUsagePage = 0xFF43
-            rid[1].usUsage = 0x0202
-            rid[1].dwFlags = RIDEV_INPUTSINK
-            rid[1].hwndTarget = self._ri_hwnd
-            rid[2].usUsagePage = 0xFF43
-            rid[2].usUsage = 0x0204
-            rid[2].dwFlags = RIDEV_INPUTSINK
-            rid[2].hwndTarget = self._ri_hwnd
-            rid[3].usUsagePage = 0x0C
-            rid[3].usUsage = 0x01
-            rid[3].dwFlags = RIDEV_INPUTSINK
-            rid[3].hwndTarget = self._ri_hwnd
+            usages = (
+                (0x01, 0x02),      # Generic mouse
+                (0xFF00, 0x01),    # Lightspeed receiver vendor collection
+                (0xFF00, 0x02),    # Lightspeed receiver HID++ reports
+                (0xFF43, 0x0202),  # Logitech HID++ / legacy devices
+                (0xFF43, 0x0204),
+                (0xFF43, 0x0301),  # G PRO 2 direct USB collections
+                (0xFF43, 0x0302),
+                (0x0C, 0x01),      # Consumer control
+            )
+            rid = (RAWINPUTDEVICE * len(usages))()
+            for idx, (usage_page, usage) in enumerate(usages):
+                rid[idx].usUsagePage = usage_page
+                rid[idx].usUsage = usage
+                rid[idx].dwFlags = RIDEV_INPUTSINK
+                rid[idx].hwndTarget = self._ri_hwnd
 
-            if RegisterRawInputDevices(rid, 4, sizeof(RAWINPUTDEVICE)):
-                print("[MouseHook] Raw Input: mice + Logitech HID + consumer")
+            if RegisterRawInputDevices(rid, len(usages), sizeof(RAWINPUTDEVICE)):
+                print("[MouseHook] Raw Input: mice + Logitech HID++ + consumer")
                 return True
-            if RegisterRawInputDevices(rid, 2, sizeof(RAWINPUTDEVICE)):
-                print("[MouseHook] Raw Input: mice + Logitech HID short")
+            if RegisterRawInputDevices(rid, 3, sizeof(RAWINPUTDEVICE)):
+                print("[MouseHook] Raw Input: mice + Lightspeed HID++")
                 return True
             if RegisterRawInputDevices(rid, 1, sizeof(RAWINPUTDEVICE)):
                 print("[MouseHook] Raw Input: mice only")
@@ -830,6 +1153,8 @@ if sys.platform == "win32":
             print("[MouseHook] Device change detected — refreshing hook")
             self._device_name_cache.clear()
             self._prev_raw_buttons.clear()
+            self._prev_hidpp_button_spy.clear()
+            self._prev_consumer_usages.clear()
             self._reinstall_hook()
 
         def _reinstall_hook(self):
@@ -942,6 +1267,7 @@ if sys.platform == "win32":
                     on_connect=self._on_hid_connect,
                     on_disconnect=self._on_hid_disconnect,
                     extra_diverts=extra,
+                    on_button_spy=self._on_hid_button_spy,
                 )
                 self._hid_gesture = listener
                 if not listener.start():
@@ -1459,6 +1785,12 @@ elif sys.platform == "darwin":
                     elif btn == _BTN_FORWARD:
                         mouse_event = MouseEvent(MouseEvent.XBUTTON2_DOWN)
                         should_block = MouseEvent.XBUTTON2_DOWN in self._blocked_events
+                    elif btn == _BTN_BACK + 2:
+                        mouse_event = MouseEvent(MouseEvent.XBUTTON3_DOWN)
+                        should_block = MouseEvent.XBUTTON3_DOWN in self._blocked_events
+                    elif btn >= _BTN_FORWARD + 2:
+                        mouse_event = MouseEvent(MouseEvent.XBUTTON4_DOWN)
+                        should_block = MouseEvent.XBUTTON4_DOWN in self._blocked_events
 
                 elif event_type == Quartz.kCGEventOtherMouseUp:
                     btn = Quartz.CGEventGetIntegerValueField(
@@ -1477,6 +1809,12 @@ elif sys.platform == "darwin":
                     elif btn == _BTN_FORWARD:
                         mouse_event = MouseEvent(MouseEvent.XBUTTON2_UP)
                         should_block = MouseEvent.XBUTTON2_UP in self._blocked_events
+                    elif btn == _BTN_BACK + 2:
+                        mouse_event = MouseEvent(MouseEvent.XBUTTON3_UP)
+                        should_block = MouseEvent.XBUTTON3_UP in self._blocked_events
+                    elif btn >= _BTN_FORWARD + 2:
+                        mouse_event = MouseEvent(MouseEvent.XBUTTON4_UP)
+                        should_block = MouseEvent.XBUTTON4_UP in self._blocked_events
 
                 elif event_type == Quartz.kCGEventScrollWheel:
                     if (
@@ -2379,6 +2717,22 @@ elif sys.platform == "linux":
                 elif event.value == 0:
                     mouse_event = MouseEvent(MouseEvent.XBUTTON2_UP)
                     should_block = MouseEvent.XBUTTON2_UP in self._blocked_events
+
+            elif event.code == 0x119:  # BTN_SIDE2 (button 289)
+                if event.value == 1:
+                    mouse_event = MouseEvent(MouseEvent.XBUTTON3_DOWN)
+                    should_block = MouseEvent.XBUTTON3_DOWN in self._blocked_events
+                elif event.value == 0:
+                    mouse_event = MouseEvent(MouseEvent.XBUTTON3_UP)
+                    should_block = MouseEvent.XBUTTON3_UP in self._blocked_events
+
+            elif event.code == 0x11a:  # BTN_EXTRA2 (button 290)
+                if event.value == 1:
+                    mouse_event = MouseEvent(MouseEvent.XBUTTON4_DOWN)
+                    should_block = MouseEvent.XBUTTON4_DOWN in self._blocked_events
+                elif event.value == 0:
+                    mouse_event = MouseEvent(MouseEvent.XBUTTON4_UP)
+                    should_block = MouseEvent.XBUTTON4_UP in self._blocked_events
 
             elif event.code == _ecodes.BTN_MIDDLE:
                 if event.value == 1:

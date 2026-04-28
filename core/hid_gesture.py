@@ -473,15 +473,50 @@ BT_DEV_IDX     = 0xFF        # device-index for direct Bluetooth
 # Known Logi Bolt receiver PID.
 # Source: https://github.com/pwr-Solaar/Solaar/blob/master/lib/logitech_receiver/base_usb.py
 BOLT_RECEIVER_PID = 0xC548
+# Known Lightspeed receiver PIDs (gaming mice)
+LIGHTSPEED_RECEIVER_PIDS = {
+    0xC539, 0xC53A, 0xC53D, 0xC53F, 0xC541, 0xC545, 0xC547, 0xC54D,
+}
+# HID++ 1.0 register addresses for receiver device enumeration
+REG_RECEIVER_INFO = 0x2B5
+REG_PAIRING_INFO  = 0x2B0   # base: add device index (0x2B0 + idx - 1)
+REG_BOLT_PAIRING  = 0x2B5   # Bolt uses sub-registers 0x50+N
 FEAT_IROOT     = 0x0000
 FEAT_REPROG_V4 = 0x1B04      # Reprogrammable Controls V4
 FEAT_ADJ_DPI   = 0x2201      # Adjustable DPI
+FEAT_EXT_ADJ_DPI = 0x2202    # Extended Adjustable DPI
 FEAT_SMART_SHIFT          = 0x2110  # Smart Shift basic
 FEAT_SMART_SHIFT_ENHANCED = 0x2111  # Smart Shift Enhanced (MX Master 3/3S, MX Master 4)
 FEAT_UNIFIED_BATT   = 0x1004      # Unified Battery (preferred)
 FEAT_DEVICE_NAME    = 0x0005      # Device Name & Type
 FEAT_BATTERY_STATUS = 0x1000      # Battery Status (fallback)
+FEAT_ONBOARD_PROFILES = 0x8100    # Gaming onboard profile mode
+FEAT_MOUSE_BUTTON_SPY = 0x8110    # Gaming mouse physical button bitmask reports
 DEFAULT_GESTURE_CID = DEFAULT_GESTURE_CIDS[0]
+
+G_PRO_2_MOUSER_PROFILE_SECTOR = 0x0002
+G_PRO_2_ROM_PROFILE_SECTOR = 0x0101
+G_PRO_2_ROM_CONTROL_SECTOR = 0x0100
+G_PRO_2_MOUSER_CONSUMER_USAGES = {
+    "dpi_switch": 0x00FD,
+    "right_back": 0x03F1,
+    "right_front": 0x03F2,
+}
+G_PRO_2_MOUSER_BUTTON_MAPPINGS = (
+    (0x44, 0x03, G_PRO_2_MOUSER_CONSUMER_USAGES["dpi_switch"], "dpi_switch"),
+    (0x48, 0x03, G_PRO_2_MOUSER_CONSUMER_USAGES["right_back"], "right_back"),
+    (0x4C, 0x03, G_PRO_2_MOUSER_CONSUMER_USAGES["right_front"], "right_front"),
+)
+
+# Centurion protocol constants (Lightspeed PRO-series receivers)
+CENTURION_REPORT_ID = 0x51
+CENTURION_FRAME_SIZE = 64
+_CENTURION_BRIDGE_FIRST_CHUNK = 56
+_CENTURION_BRIDGE_CONT_CHUNK = 60
+_CENTURION_SW_ID_NEXT = iter(range(8))
+CENTURION_ROOT_FEATURE = 0x0000
+CENTURION_FEATURE_SET = 0x0001
+CENT_PP_BRIDGE = 0x0003
 
 MY_SW          = 0x0A        # arbitrary software-id used in our requests
 
@@ -569,18 +604,95 @@ def _format_cid(cid):
     return f"0x{cid:04X} ({name})" if name else f"0x{cid:04X}"
 
 
+def _crc16(data):
+    table = [
+        0x0000, 0x1021, 0x2042, 0x3063, 0x4084, 0x50A5, 0x60C6, 0x70E7,
+        0x8108, 0x9129, 0xA14A, 0xB16B, 0xC18C, 0xD1AD, 0xE1CE, 0xF1EF,
+    ]
+    crc = 0xFFFF
+    for byte in data:
+        crc = (crc << 4) ^ table[((crc >> 12) ^ (byte >> 4)) & 0x0F]
+        crc &= 0xFFFF
+        crc = (crc << 4) ^ table[((crc >> 12) ^ byte) & 0x0F]
+        crc &= 0xFFFF
+    return crc
+
+
+def _append_profile_crc(payload, size):
+    body = bytearray(payload[:max(0, size - 2)])
+    if len(body) < size - 2:
+        body.extend([0xFF] * (size - 2 - len(body)))
+    crc = _crc16(body)
+    body.extend([(crc >> 8) & 0xFF, crc & 0xFF])
+    return bytes(body)
+
+
+def _parse_onboard_profile_headers(data):
+    headers = []
+    if not data or len(data) < 4:
+        return headers
+    first = bytes(data[:4])
+    if first in (b"\x00\x00\x00\x00", b"\xFF\xFF\xFF\xFF"):
+        return headers
+    for offset in range(0, len(data) - 3, 4):
+        sector = ((data[offset] & 0xFF) << 8) | (data[offset + 1] & 0xFF)
+        enabled = data[offset + 2] & 0xFF
+        if sector == 0xFFFF:
+            break
+        if sector == 0x0000 and enabled == 0x00 and data[offset + 3] == 0x00:
+            break
+        headers.append((sector, enabled))
+    return headers
+
+
+def _build_onboard_control_sector(size, profile_sector, headers=None, max_profiles=5):
+    ordered = [(profile_sector, 0x01)]
+    seen = {profile_sector}
+    for sector, enabled in headers or ():
+        if sector in seen or sector in (0x0000, 0xFFFF):
+            continue
+        ordered.append((sector, enabled))
+        seen.add(sector)
+        if len(ordered) >= max_profiles:
+            break
+
+    body = bytearray()
+    for sector, enabled in ordered[:max_profiles]:
+        body.extend([(sector >> 8) & 0xFF, sector & 0xFF, enabled & 0xFF, 0x00])
+    body.extend([0xFF, 0xFF, 0x00, 0x00])
+    return _append_profile_crc(body, size)
+
+
+def _build_g_pro_2_mouser_profile(base_profile, size):
+    if not base_profile or len(base_profile) < size:
+        return None
+    body = bytearray(base_profile[:max(0, size - 2)])
+    for offset, subtype, value, _name in G_PRO_2_MOUSER_BUTTON_MAPPINGS:
+        if offset + 4 > len(body):
+            return None
+        body[offset:offset + 4] = [
+            0x80,
+            subtype & 0xFF,
+            (value >> 8) & 0xFF,
+            value & 0xFF,
+        ]
+    return _append_profile_crc(body, size)
+
+
 # ── Listener class ────────────────────────────────────────────────
 
 class HidGestureListener:
     """Background thread: diverts the gesture button and listens via HID++."""
 
     def __init__(self, on_down=None, on_up=None, on_move=None,
-                 on_connect=None, on_disconnect=None, extra_diverts=None):
+                 on_connect=None, on_disconnect=None, extra_diverts=None,
+                 on_button_spy=None):
         self._on_down       = on_down
         self._on_up         = on_up
         self._on_move       = on_move
         self._on_connect    = on_connect
         self._on_disconnect = on_disconnect
+        self._on_button_spy = on_button_spy
         self._extra_diverts = {
             cid: {**info, "held": False}
             for cid, info in (extra_diverts or {}).items()
@@ -590,6 +702,7 @@ class HidGestureListener:
         self._running   = False
         self._feat_idx  = None          # feature index of REPROG_V4
         self._dpi_idx   = None          # feature index of ADJUSTABLE_DPI
+        self._dpi_extended = False      # True when feature 0x2202 is used
         self._battery_idx = None
         self._battery_feature_id = None
         self._dev_idx   = BT_DEV_IDX
@@ -602,6 +715,9 @@ class HidGestureListener:
         self._dpi_result  = None        # True/False after apply
         self._smart_shift_idx = None      # feature index of SMART_SHIFT / SMART_SHIFT_ENHANCED
         self._smart_shift_enhanced = False  # True → use fn 1/2; False → fn 0/1
+        self._onboard_profiles_idx = None
+        self._onboard_profiles_restore_mode = None
+        self._mouse_button_spy_idx = None   # feature index of MOUSE_BUTTON_SPY
         self._pending_smart_shift = None
         self._smart_shift_result = None
         self._smart_shift_call_lock = threading.Lock()
@@ -614,6 +730,12 @@ class HidGestureListener:
         self._connected_device_info = None
         self._last_controls = []   # REPROG_V4 controls from last connection
         self._consecutive_request_timeouts = 0
+
+        # Centurion protocol state (Lightspeed PRO-series receivers)
+        self._is_centurion = False
+        self._centurion_bridge_idx = None
+        self._centurion_sub_feat_set_idx = None
+        self._centurion_sub_indices = {}  # feature_id -> sub-device feature index
 
     # ── public API ────────────────────────────────────────────────
 
@@ -647,6 +769,10 @@ class HidGestureListener:
     def connected_device(self):
         return self._connected_device_info
 
+    @property
+    def mouse_button_spy_index(self):
+        return self._mouse_button_spy_idx
+
     def dump_device_info(self):
         """Return a dict describing everything we know about the connected device.
 
@@ -661,7 +787,12 @@ class HidGestureListener:
         if self._feat_idx is not None:
             features["REPROG_V4 (0x1B04)"] = f"index 0x{self._feat_idx:02X}"
         if self._dpi_idx is not None:
-            features["ADJUSTABLE_DPI (0x2201)"] = f"index 0x{self._dpi_idx:02X}"
+            feat_name = (
+                "EXTENDED_ADJUSTABLE_DPI (0x2202)"
+                if self._dpi_extended
+                else "ADJUSTABLE_DPI (0x2201)"
+            )
+            features[feat_name] = f"index 0x{self._dpi_idx:02X}"
         if self._smart_shift_idx is not None:
             feat_name = ("SMART_SHIFT_ENHANCED (0x2111)"
                          if self._smart_shift_enhanced
@@ -671,6 +802,14 @@ class HidGestureListener:
             feat_name = (f"0x{self._battery_feature_id:04X}"
                          if self._battery_feature_id else "unknown")
             features[f"BATTERY ({feat_name})"] = f"index 0x{self._battery_idx:02X}"
+        if self._mouse_button_spy_idx is not None:
+            features["MOUSE_BUTTON_SPY (0x8110)"] = (
+                f"index 0x{self._mouse_button_spy_idx:02X}"
+            )
+        if self._onboard_profiles_idx is not None:
+            features["ONBOARD_PROFILES (0x8100)"] = (
+                f"index 0x{self._onboard_profiles_idx:02X}"
+            )
 
         controls = []
         for c in self._last_controls:
@@ -764,7 +903,10 @@ class HidGestureListener:
         return list(d) if d else None
 
     def _request(self, feat, func, params, timeout_ms=2000):
-        """Send a long HID++ request, wait for matching response."""
+        """Send a long HID++ request, wait for matching response.
+        Routes through Centurion bridge when _is_centurion is True."""
+        if self._is_centurion:
+            return self._centurion_feature_request(feat, func, list(params))
         req_params = list(params)
         try:
             self._tx(LONG_ID, feat, func, req_params)
@@ -818,6 +960,312 @@ class HidGestureListener:
         return None
 
     # ── feature helpers ───────────────────────────────────────────
+
+    def _read_register(self, register, *params):
+        """Send a HID++ 1.0 register read using short report format."""
+        request_id = 0x8100 | (register & 0x2FF)
+        # Short report: [0x10, devIdx, SubId, Address, param0, param1, param2]
+        buf = [0] * SHORT_LEN
+        buf[0] = SHORT_ID
+        buf[1] = 0xFF  # receiver device index
+        buf[2] = (request_id >> 8) & 0xFF  # SubId
+        buf[3] = request_id & 0xFF          # Address
+        for i, b in enumerate(params):
+            if 4 + i < SHORT_LEN:
+                buf[4 + i] = b & 0xFF
+        try:
+            self._dev.write(buf)
+        except Exception:
+            return None
+        deadline = time.time() + 1.5
+        while time.time() < deadline:
+            raw = self._rx(500)
+            if raw is None:
+                continue
+            msg = _parse(raw)
+            if msg is None:
+                continue
+            _, r_feat, r_func, r_sw, r_params = msg
+            # HID++ 1.0 register response echoes SubId/Address
+            if r_feat == buf[2] and r_func == (buf[3] >> 4):
+                return r_params
+            self._on_report(raw)
+        return None
+
+    def _enumerate_receiver_devices(self, pid):
+        """Enumerate paired devices on a Lightspeed/Unifying/Bolt receiver.
+
+        Returns a list of (device_index, wpid_hex) tuples for online devices.
+        """
+        devices = []
+        is_bolt = (pid == BOLT_RECEIVER_PID)
+
+        if is_bolt:
+            # Bolt receivers use sub-register 0x50 + device_index
+            for idx in range(1, 7):
+                sub = 0x50 + idx - 1
+                resp = self._read_register(REG_BOLT_PAIRING, sub)
+                if resp and len(resp) >= 8:
+                    wpid = (resp[0] << 8) | resp[1]
+                    if wpid:
+                        devices.append((idx, wpid))
+        else:
+            # Lightspeed and Unifying use 0x2B0 + idx - 1 (or 0x20 + idx - 1)
+            for idx in range(1, 7):
+                sub = 0x20 + idx - 1
+                resp = self._read_register(REG_RECEIVER_INFO, sub)
+                if resp and len(resp) >= 4:
+                    wpid = (resp[0] << 8) | resp[1]
+                    if wpid:
+                        devices.append((idx, wpid))
+        return devices
+
+    # ── Centurion protocol ────────────────────────────────────────────
+
+    def _get_next_sw_id(self):
+        try:
+            return next(_CENTURION_SW_ID_NEXT) & 0x0F
+        except StopIteration:
+            return 0
+
+    def _write_centurion_cpl(self, layer3_payload, flags=0x00):
+        """Send a Centurion CPL frame: [0x51, cpl_length, flags, payload, zero-pad]."""
+        if self._dev is None:
+            raise IOError("No device")
+        cpl_length = len(layer3_payload) + 1  # +1 for flags byte
+        frame = bytearray(CENTURION_FRAME_SIZE)
+        frame[0] = CENTURION_REPORT_ID
+        frame[1] = cpl_length
+        frame[2] = flags
+        for i, b in enumerate(layer3_payload):
+            if 3 + i < CENTURION_FRAME_SIZE:
+                frame[3 + i] = b & 0xFF
+        self._dev.write(bytes(frame))
+
+    def _centurion_bridge_request(self, sub_feat_idx, sub_function=0x00, *params):
+        """Send a request to the Centurion sub-device (mouse) via CentPPBridge.
+
+        Returns the sub-device response data (bytes) or None.
+        """
+        if self._centurion_bridge_idx is None or self._dev is None:
+            return None
+
+        sw_id = self._get_next_sw_id()
+
+        # Layer 4: sub-device message [sub_cpl=0x00, sub_feat_idx, sub_func|swid, params...]
+        sub_msg = bytearray([0x00, sub_feat_idx, (sub_function & 0xF0) | sw_id])
+        for p in params:
+            sub_msg.append(p & 0xFF)
+        sub_len = len(sub_msg)
+
+        # Bridge header: [device_id<<4 | len_hi, len_lo]
+        bridge_hdr = bytearray([(0x00 << 4) | ((sub_len >> 8) & 0x0F), sub_len & 0xFF])
+        # Bridge prefix: [bridge_idx, sendFragment_func|swid]
+        bridge_prefix = bytearray([self._centurion_bridge_idx, (0x01 << 4) | sw_id])
+
+        # Send single-frame or multi-fragment
+        if sub_len <= _CENTURION_BRIDGE_FIRST_CHUNK:
+            layer3 = bytes(bridge_prefix + bridge_hdr + sub_msg)
+            self._write_centurion_cpl(layer3, flags=0x00)
+        else:
+            # Multi-fragment send
+            offset = 0
+            frag_index = 0
+            while offset < sub_len:
+                if frag_index == 0:
+                    chunk_size = _CENTURION_BRIDGE_FIRST_CHUNK
+                    chunk = sub_msg[offset:offset + chunk_size]
+                    layer3 = bytes(bridge_prefix + bridge_hdr + chunk)
+                else:
+                    chunk_size = _CENTURION_BRIDGE_CONT_CHUNK
+                    chunk = sub_msg[offset:offset + chunk_size]
+                    layer3 = bytes(chunk)
+                has_more = (offset + chunk_size) < sub_len
+                flags = (frag_index << 1) | (1 if has_more else 0)
+                self._write_centurion_cpl(layer3, flags=flags)
+                offset += len(chunk)
+                frag_index += 1
+
+        # Read ACK + MessageEvent response
+        deadline = time.time() + 3.0
+        ack_received = False
+
+        while time.time() < deadline:
+            raw = self._rx(500)
+            if raw is None:
+                continue
+            raw = list(raw)
+
+            # On Windows/hidapi, the report ID byte is stripped from read data.
+            # Detect whether report ID 0x51 was included or stripped.
+            if raw[0] == CENTURION_REPORT_ID:
+                pass  # Report ID present (Linux/macOS style)
+            else:
+                # Report ID stripped (Windows hidapi style) — reconstruct
+                raw = [CENTURION_REPORT_ID] + raw
+
+            # Parse Centurion CPL response
+            if raw[0] == CENTURION_REPORT_ID and len(raw) >= 5:
+                # CPL frame: [0x51, cpl_len, flags, bridge_idx, func_sw, ...]
+                r_bridge = raw[3]
+                r_fsw = raw[4]
+                r_func = (r_fsw >> 4) & 0x0F
+                r_sw = r_fsw & 0x0F
+
+                # ACK: func=0x01, sw matches
+                if r_func == 0x01 and r_sw == sw_id and r_bridge == self._centurion_bridge_idx:
+                    ack_received = True
+                    continue
+
+                # MessageEvent: func=0x01, sw=0
+                if r_func == 0x01 and r_sw == 0 and r_bridge == self._centurion_bridge_idx:
+                    # Check if this is for our sub_feat_idx
+                    if len(raw) >= 7:
+                        r_sub_cpl = raw[5]
+                        r_sub_feat = raw[6]
+                        if r_sub_cpl == 0x00 and r_sub_feat == sub_feat_idx:
+                            return raw[8:] if len(raw) > 8 else bytes()
+                        # Error: sub_feat=0xFF
+                        if r_sub_feat == 0xFF and len(raw) >= 8 and raw[7] == sub_feat_idx:
+                            err = raw[9] if len(raw) > 9 else 0
+                            print(f"[HidGesture] Centurion bridge error: feat={sub_feat_idx} err=0x{err:02X}")
+                            return None
+
+            # Also handle standard HID++ responses
+            msg = _parse(raw)
+            if msg:
+                self._on_report(raw)
+
+        if not ack_received:
+            print("[HidGesture] Centurion bridge: no ACK received")
+        return None
+
+    def _discover_centurion_features(self):
+        """Discover features on a Centurion (Lightspeed PRO) receiver and its sub-device.
+
+        Populates self._feat_idx, self._dpi_idx etc. via the Centurion bridge.
+        Returns True if the device is usable.
+        """
+        self._is_centurion = True
+        self._centurion_bridge_idx = None
+        self._centurion_sub_indices = {}
+
+        # Phase A: Discover dongle features using standard HID++ 2.0 on devIdx=0xFF
+        # Temporarily disable Centurion routing so _request() uses direct HID++
+        # (the dongle itself speaks standard HID++ 2.0, not through the bridge).
+        saved_idx = self._dev_idx
+        self._is_centurion = False
+        self._dev_idx = 0xFF
+        # Use direct HID++ 2.0 query (dongle itself speaks standard HID++)
+        # Dongle IROOT: get feature for CENTURION_FEATURE_SET (0x0001)
+        fs_index = None
+        for idx in (0xFF, 0x01):
+            self._dev_idx = idx
+            fi = self._find_feature(CENTURION_FEATURE_SET)
+            if fi is not None and fi != 0:
+                fs_index = fi
+                break
+            fi = self._find_feature(CENT_PP_BRIDGE)
+            if fi is not None and fi != 0:
+                self._centurion_bridge_idx = fi
+                break
+
+        # Also try to find bridge via IROOT feature enumeration
+        if self._centurion_bridge_idx is None:
+            # Try direct feature enumeration on the dongle
+            for idx in (0xFF, 0x01):
+                self._dev_idx = idx
+                fi = self._find_feature(CENT_PP_BRIDGE)
+                if fi is not None and fi != 0:
+                    self._centurion_bridge_idx = fi
+                    print(f"[HidGesture] Centurion: found CentPPBridge at index 0x{fi:02X}")
+                    break
+
+        # Re-enable Centurion routing now that bridge is found
+        self._is_centurion = True
+
+        if self._centurion_bridge_idx is None:
+            print("[HidGesture] Centurion: CentPPBridge not found on dongle")
+            self._is_centurion = False
+            return False
+
+        print(f"[HidGesture] Centurion: CentPPBridge at index 0x{self._centurion_bridge_idx:02X}")
+
+        # Phase B: Discover sub-device features via bridge
+        # Query CenturionRoot (sub_feat_idx=0) for FeatureSet feature ID
+        feat_set_hi = (FEAT_IROOT >> 8) & 0xFF
+        feat_set_lo = FEAT_IROOT & 0xFF
+        # Use CenturionRoot GetFeature (func=0) to find FeatureSet index on sub-device
+        # Centurion sub-feature index 0 is the root
+        # GetFeature: [0x0001_hi, 0x0001_lo]
+        resp = self._centurion_bridge_request(0x00, 0x00, 0x00, 0x01)
+        if resp and len(resp) >= 1:
+            sub_fs_idx = resp[0]
+            print(f"[HidGesture] Centurion: sub-device FeatureSet at index {sub_fs_idx}")
+        else:
+            print("[HidGesture] Centurion: failed to find sub-device FeatureSet")
+            return False
+
+        # Bulk enumerate sub-device features
+        # CenturionFeatureSet.GetFeatureId (func=0x10, start_index=0)
+        resp = self._centurion_bridge_request(sub_fs_idx, 0x10, 0x00)
+        if resp and len(resp) >= 1:
+            entry_count = resp[0]
+            entries = resp[1:]
+            sub_feat_idx = 0
+            for i in range(entry_count):
+                offset = i * 4
+                if offset + 2 > len(entries):
+                    break
+                feat_id = (entries[offset] << 8) | entries[offset + 1]
+                self._centurion_sub_indices[feat_id] = sub_feat_idx
+                print(f"[HidGesture] Centurion sub-feature [{sub_feat_idx}]: 0x{feat_id:04X}")
+                sub_feat_idx += 1
+
+        # Now map important features
+        if FEAT_REPROG_V4 in self._centurion_sub_indices:
+            self._feat_idx = self._centurion_sub_indices[FEAT_REPROG_V4]
+            print(f"[HidGesture] Centurion: REPROG_V4 at sub-index {self._feat_idx}")
+        else:
+            print("[HidGesture] Centurion: REPROG_V4 not found on sub-device")
+
+        if FEAT_ADJ_DPI in self._centurion_sub_indices:
+            self._dpi_idx = self._centurion_sub_indices[FEAT_ADJ_DPI]
+            self._dpi_extended = False
+            print(f"[HidGesture] Centurion: ADJ_DPI at sub-index {self._dpi_idx}")
+        elif FEAT_EXT_ADJ_DPI in self._centurion_sub_indices:
+            self._dpi_idx = self._centurion_sub_indices[FEAT_EXT_ADJ_DPI]
+            self._dpi_extended = True
+            print(f"[HidGesture] Centurion: EXT_ADJ_DPI at sub-index {self._dpi_idx}")
+
+        # Restore dev_idx
+        self._dev_idx = saved_idx
+
+        # Get device name via bridge
+        if FEAT_DEVICE_NAME in self._centurion_sub_indices:
+            self._dev_idx = 0x01  # placeholder for centurion
+
+        if self._feat_idx is None:
+            self._is_centurion = False
+            return False
+        return True
+
+    def _centurion_feature_request(self, feature_id_or_idx, func, params):
+        """Send a feature request via the Centurion bridge to the sub-device.
+
+        Accepts either a 16-bit feature ID (looked up in _centurion_sub_indices)
+        or a direct sub-device feature index (small int used by _feat_idx etc.).
+        """
+        sub_idx = self._centurion_sub_indices.get(feature_id_or_idx)
+        if sub_idx is None:
+            # Treat as a direct sub-device feature index (from _feat_idx, _dpi_idx, etc.)
+            sub_idx = feature_id_or_idx
+        resp = self._centurion_bridge_request(sub_idx, (func & 0x0F) << 4, *params)
+        if resp is None:
+            return None
+        # Convert response to the format expected by _request callers
+        # _request returns (dev, feat, func, sw, params) — we simulate it
+        return (0x01, feature_id_or_idx, func, MY_SW, list(resp))
 
     def _find_feature(self, feature_id):
         """Use IRoot (feature 0x0000) to discover a feature index."""
@@ -949,8 +1397,10 @@ class HidGestureListener:
     def _choose_gesture_candidates(self, controls, device_spec=None):
         present = {c["cid"] for c in controls}
         ordered = []
-        preferred = tuple(
-            getattr(device_spec, "gesture_cids", ()) or DEFAULT_GESTURE_CIDS
+        preferred = (
+            tuple(getattr(device_spec, "gesture_cids", DEFAULT_GESTURE_CIDS))
+            if device_spec is not None
+            else tuple(DEFAULT_GESTURE_CIDS)
         )
 
         def add_candidate(cid):
@@ -983,6 +1433,11 @@ class HidGestureListener:
         """Divert the selected gesture control and enable raw XY when supported."""
         if self._feat_idx is None:
             return False
+        if not self._gesture_candidates:
+            self._gesture_cid = None
+            self._rawxy_enabled = False
+            print("[HidGesture] No gesture control for this device")
+            return True
         for cid in self._gesture_candidates:
             self._gesture_cid = cid
             resp = self._set_cid_reporting(cid, 0x33)
@@ -1013,26 +1468,254 @@ class HidGestureListener:
     def _undivert(self):
         """Restore default button behaviour (best-effort)."""
         if self._feat_idx is None or self._dev is None:
+            self._restore_onboard_profiles()
             return
         # Undivert extra CIDs
         for cid in self._extra_diverts:
             hi = (cid >> 8) & 0xFF
             lo = cid & 0xFF
             try:
-                self._tx(LONG_ID, self._feat_idx, 3,
-                         [hi, lo, 0x02, 0x00, 0x00])
+                self._set_cid_reporting(cid, 0x02)
             except Exception:
                 pass
+        if self._gesture_cid is None:
+            self._rawxy_enabled = False
+            return
         # Undivert gesture CID
-        hi = (self._gesture_cid >> 8) & 0xFF
-        lo = self._gesture_cid & 0xFF
         flags = 0x22 if self._rawxy_enabled else 0x02
         try:
-            self._tx(LONG_ID, self._feat_idx, 3,
-                     [hi, lo, flags, 0x00, 0x00])
+            self._set_cid_reporting(self._gesture_cid, flags)
         except Exception:
             pass
         self._rawxy_enabled = False
+        self._restore_onboard_profiles()
+
+    def _read_onboard_profile_info(self):
+        if self._onboard_profiles_idx is None:
+            return None
+        resp = self._request(self._onboard_profiles_idx, 0, [], timeout_ms=800)
+        if not resp:
+            print("[HidGesture] ONBOARD_PROFILES info read failed")
+            return None
+        _, _, _, _, params = resp
+        if len(params) < 10:
+            print(f"[HidGesture] ONBOARD_PROFILES info too short: [{_hex_bytes(params)}]")
+            return None
+        size = ((params[7] & 0xFF) << 8) | (params[8] & 0xFF)
+        return {
+            "memory": params[0] & 0xFF,
+            "profile": params[1] & 0xFF,
+            "macro": params[2] & 0xFF,
+            "count": params[3] & 0xFF,
+            "oob": params[4] & 0xFF,
+            "buttons": params[5] & 0xFF,
+            "sectors": params[6] & 0xFF,
+            "size": size,
+            "shift": params[9] & 0xFF,
+        }
+
+    def _read_onboard_sector(self, sector, size):
+        if self._onboard_profiles_idx is None or size <= 0:
+            return None
+        hi = (sector >> 8) & 0xFF
+        lo = sector & 0xFF
+        if size <= 16:
+            resp = self._request(self._onboard_profiles_idx, 5, [hi, lo, 0x00, 0x00], timeout_ms=800)
+            if not resp:
+                return None
+            return bytes(resp[4][:size])
+
+        data = bytearray()
+        offset = 0
+        while offset < size - 15:
+            resp = self._request(
+                self._onboard_profiles_idx,
+                5,
+                [hi, lo, (offset >> 8) & 0xFF, offset & 0xFF],
+                timeout_ms=800,
+            )
+            if not resp:
+                return None
+            data.extend(resp[4][:16])
+            offset += 16
+
+        last_offset = size - 16
+        resp = self._request(
+            self._onboard_profiles_idx,
+            5,
+            [hi, lo, (last_offset >> 8) & 0xFF, last_offset & 0xFF],
+            timeout_ms=800,
+        )
+        if not resp:
+            return None
+        data.extend(resp[4][16 + offset - size:16])
+        return bytes(data[:size])
+
+    def _write_onboard_sector(self, sector, payload):
+        if self._onboard_profiles_idx is None or not payload:
+            return False
+        current = self._read_onboard_sector(sector, len(payload))
+        if current is None:
+            print(f"[HidGesture] ONBOARD_PROFILES sector 0x{sector:04X} read-before-write failed")
+            return False
+        if current == payload:
+            print(f"[HidGesture] ONBOARD_PROFILES sector 0x{sector:04X} already up to date")
+            return True
+
+        hi = (sector >> 8) & 0xFF
+        lo = sector & 0xFF
+        length = len(payload)
+        resp = self._request(
+            self._onboard_profiles_idx,
+            6,
+            [hi, lo, 0x00, 0x00, (length >> 8) & 0xFF, length & 0xFF],
+            timeout_ms=1200,
+        )
+        if not resp:
+            print(f"[HidGesture] ONBOARD_PROFILES sector 0x{sector:04X} begin write failed")
+            return False
+
+        offset = 0
+        while offset < length - 1:
+            chunk = list(payload[offset:offset + 16])
+            resp = self._request(self._onboard_profiles_idx, 7, chunk, timeout_ms=1200)
+            if not resp:
+                print(
+                    "[HidGesture] ONBOARD_PROFILES sector "
+                    f"0x{sector:04X} write chunk {offset} failed"
+                )
+                return False
+            offset += 16
+
+        resp = self._request(self._onboard_profiles_idx, 8, [], timeout_ms=1500)
+        if not resp:
+            print(f"[HidGesture] ONBOARD_PROFILES sector 0x{sector:04X} commit failed")
+            return False
+
+        verify = self._read_onboard_sector(sector, len(payload))
+        if verify != payload:
+            print(f"[HidGesture] ONBOARD_PROFILES sector 0x{sector:04X} verify failed")
+            return False
+        print(f"[HidGesture] ONBOARD_PROFILES sector 0x{sector:04X} written")
+        return True
+
+    def _read_onboard_headers(self, size):
+        control = self._read_onboard_sector(0x0000, size)
+        headers = _parse_onboard_profile_headers(control)
+        if headers:
+            return headers
+        rom_control = self._read_onboard_sector(G_PRO_2_ROM_CONTROL_SECTOR, size)
+        return _parse_onboard_profile_headers(rom_control)
+
+    def _set_onboard_profile_mode(self, mode):
+        if self._onboard_profiles_idx is None:
+            return False
+        resp = self._request(self._onboard_profiles_idx, 1, [mode & 0xFF], timeout_ms=800)
+        if resp:
+            print(f"[HidGesture] ONBOARD_PROFILES mode set to 0x{mode:02X}")
+            return True
+        print(f"[HidGesture] ONBOARD_PROFILES mode set to 0x{mode:02X} failed")
+        return False
+
+    def _set_active_onboard_profile(self, sector):
+        if self._onboard_profiles_idx is None:
+            return False
+        resp = self._request(
+            self._onboard_profiles_idx,
+            3,
+            [(sector >> 8) & 0xFF, sector & 0xFF],
+            timeout_ms=800,
+        )
+        if resp:
+            print(f"[HidGesture] ONBOARD_PROFILES active sector set to 0x{sector:04X}")
+            return True
+        print(f"[HidGesture] ONBOARD_PROFILES active sector 0x{sector:04X} failed")
+        return False
+
+    def _ensure_g_pro_2_mouser_profile(self, device_spec=None):
+        """Install a G PRO 2 profile that exposes right-side and DPI buttons.
+
+        The factory onboard profile maps left/right side buttons to the same
+        two mouse button codes and keeps the DPI button as an internal function.
+        Mouser needs independent button reports, so it writes a small flash
+        profile copied from the read-only factory profile with only those
+        button mappings changed.
+        """
+        if getattr(device_spec, "key", "") != "g_pro_2_lightspeed":
+            return False
+        if self._dev is None:
+            return False
+        if self._onboard_profiles_idx is None:
+            self._onboard_profiles_idx = self._find_feature(FEAT_ONBOARD_PROFILES)
+        if self._onboard_profiles_idx is None:
+            print("[HidGesture] ONBOARD_PROFILES not found on G PRO 2")
+            return False
+
+        info = self._read_onboard_profile_info()
+        if not info:
+            return False
+        size = int(info.get("size") or 0)
+        sectors = int(info.get("sectors") or 0)
+        if size < 0x50 or G_PRO_2_MOUSER_PROFILE_SECTOR >= sectors:
+            print(
+                "[HidGesture] ONBOARD_PROFILES unsupported layout "
+                f"size={size} sectors={sectors}"
+            )
+            return False
+
+        base_profile = self._read_onboard_sector(G_PRO_2_ROM_PROFILE_SECTOR, size)
+        if base_profile is None:
+            print("[HidGesture] G PRO 2 read-only profile read failed")
+            return False
+
+        profile_payload = _build_g_pro_2_mouser_profile(base_profile, size)
+        if profile_payload is None:
+            print("[HidGesture] G PRO 2 Mouser profile build failed")
+            return False
+
+        headers = self._read_onboard_headers(size)
+        control_payload = _build_onboard_control_sector(
+            size,
+            G_PRO_2_MOUSER_PROFILE_SECTOR,
+            headers=headers,
+            max_profiles=max(1, min(15, int(info.get("count") or 5))),
+        )
+
+        if not self._write_onboard_sector(G_PRO_2_MOUSER_PROFILE_SECTOR, profile_payload):
+            return False
+        if not self._write_onboard_sector(0x0000, control_payload):
+            return False
+        if not self._set_onboard_profile_mode(0x01):
+            return False
+        if not self._set_active_onboard_profile(G_PRO_2_MOUSER_PROFILE_SECTOR):
+            return False
+
+        print(
+            "[HidGesture] G PRO 2 Mouser onboard profile active "
+            "(dpi=consumer:0x00FD right_back=consumer:0x03F1 "
+            "right_front=consumer:0x03F2)"
+        )
+        return True
+
+    def _restore_onboard_profiles(self):
+        if (
+            self._onboard_profiles_restore_mode is None
+            or self._onboard_profiles_idx is None
+            or self._dev is None
+        ):
+            return False
+        mode = self._onboard_profiles_restore_mode
+        self._onboard_profiles_restore_mode = None
+        try:
+            resp = self._request(self._onboard_profiles_idx, 1, [mode], timeout_ms=600)
+        except Exception as exc:
+            print(f"[HidGesture] ONBOARD_PROFILES restore failed: {exc}")
+            return False
+        if resp:
+            print(f"[HidGesture] ONBOARD_PROFILES restored to mode 0x{mode:02X}")
+            return True
+        print(f"[HidGesture] ONBOARD_PROFILES restore to mode 0x{mode:02X} failed")
+        return False
 
     # ── DPI control ───────────────────────────────────────────────
 
@@ -1062,12 +1745,18 @@ class HidGestureListener:
             return
         hi = (dpi >> 8) & 0xFF
         lo = dpi & 0xFF
-        # setSensorDpi: function 3, params [sensorIdx=0, dpi_hi, dpi_lo]
-        # (function 2 = getSensorDpi, function 3 = setSensorDpi)
-        resp = self._request(self._dpi_idx, 3, [0x00, hi, lo])
+        if self._dpi_extended:
+            # Extended setSensorDpi: function 6, params
+            # [sensorIdx=0, x_hi, x_lo, y_hi, y_lo, lod].  Keep X/Y in sync
+            # and preserve high lift-off distance used by the factory profile.
+            resp = self._request(self._dpi_idx, 6, [0x00, hi, lo, hi, lo, 0x02])
+        else:
+            # setSensorDpi: function 3, params [sensorIdx=0, dpi_hi, dpi_lo]
+            # (function 2 = getSensorDpi, function 3 = setSensorDpi)
+            resp = self._request(self._dpi_idx, 3, [0x00, hi, lo])
         if resp:
             _, _, _, _, p = resp
-            actual = (p[1] << 8 | p[2]) if len(p) >= 3 else dpi
+            actual = self._parse_dpi_response(p) or dpi
             print(f"[HidGesture] DPI set to {actual}")
             self._dpi_result = True
         else:
@@ -1094,17 +1783,34 @@ class HidGestureListener:
             self._dpi_result = None
             self._pending_dpi = None
             return
-        # getSensorDpi: function 2, params [sensorIdx=0]
-        resp = self._request(self._dpi_idx, 2, [0x00])
+        # getSensorDpi: function 2 for 0x2201, function 5 for 0x2202.
+        resp = self._request(
+            self._dpi_idx,
+            5 if self._dpi_extended else 2,
+            [0x00],
+        )
         if resp:
             _, _, _, _, p = resp
-            current = (p[1] << 8 | p[2]) if len(p) >= 3 else None
+            current = self._parse_dpi_response(p)
             print(f"[HidGesture] Current DPI = {current}")
             self._dpi_result = current
         else:
             print("[HidGesture] DPI read FAILED")
             self._dpi_result = None
         self._pending_dpi = None
+
+    def _parse_dpi_response(self, params):
+        if not params:
+            return None
+        if self._dpi_extended:
+            if len(params) >= 5:
+                current = (params[1] << 8) | params[2]
+                default = (params[3] << 8) | params[4]
+                return current or default or None
+            return None
+        if len(params) >= 3:
+            return (params[1] << 8) | params[2]
+        return None
 
     # ── Smart Shift control ─────────────────────────────────────
 
@@ -1345,12 +2051,71 @@ class HidGestureListener:
                     except Exception:
                         pass
 
+    def _parse_centurion_report(self, raw):
+        """Extract sub-device HID++ message from a Centurion CPL frame.
+
+        CPL frame layout: [0x51, cpl_len, flags, bridge_idx, func_sw, ...sub_msg...]
+        Sub-message: [sub_cpl, sub_feat_idx, sub_func|sw, sub_params...]
+        Returns a list suitable for _parse() or None.
+        """
+        if not raw or len(raw) < 7 or raw[0] != CENTURION_REPORT_ID:
+            return None
+        # Skip CPL header: 0x51, cpl_len, flags
+        # Then bridge prefix: bridge_idx, func_sw
+        # Then sub-message starts at offset 5
+        bridge_idx = raw[3]
+        bridge_fsw = raw[4]
+        bridge_func = (bridge_fsw >> 4) & 0x0F
+        # MessageEvent (func=0x01, sw=0) carries the async notification
+        if bridge_func != 0x01:
+            return None
+        # Sub-message starts at byte 5
+        if len(raw) < 8:
+            return None
+        sub_cpl = raw[5]
+        sub_feat = raw[6]
+        sub_fsw = raw[7] if len(raw) > 7 else 0
+        sub_params = raw[8:] if len(raw) > 8 else []
+        # Build a synthetic HID++ long report for _parse():
+        # [LONG_ID, devIdx=0x01, feat=sub_feat, func_sw=sub_fsw, params...]
+        synthetic = [LONG_ID, 0x01, sub_feat, sub_fsw] + list(sub_params)
+        return synthetic
+
     def _on_report(self, raw):
         """Inspect an incoming HID++ report for diverted button / raw XY events."""
-        msg = _parse(raw)
+        # For Centurion devices, extract the sub-device message from the CPL frame
+        if self._is_centurion and raw and len(raw) >= 4 and raw[0] == CENTURION_REPORT_ID:
+            synthetic = self._parse_centurion_report(raw)
+            if synthetic is None:
+                return
+            msg = _parse(synthetic)
+        else:
+            msg = _parse(raw)
         if msg is None:
             return
-        _, feat, func, _sw, params = msg
+        _, feat, func, sw, params = msg
+
+        if (
+            self._mouse_button_spy_idx is not None
+            and feat == self._mouse_button_spy_idx
+        ):
+            if sw != MY_SW and len(params) >= 2:
+                button_mask = (params[0] << 8) | params[1]
+                print(
+                    "[HidGesture] MOUSE_BUTTON_SPY report "
+                    f"mask=0x{button_mask:04X} func=0x{func:X} sw=0x{sw:X} "
+                    f"params=[{_hex_bytes(params)}]"
+                )
+                if self._on_button_spy:
+                    try:
+                        self._on_button_spy(
+                            button_mask,
+                            feat_idx=feat,
+                            func_sw=((func & 0x0F) << 4) | (sw & 0x0F),
+                        )
+                    except Exception as e:
+                        print(f"[HidGesture] button spy callback error: {e}")
+            return
 
         if feat != self._feat_idx:
             return
@@ -1432,13 +2197,24 @@ class HidGestureListener:
         if not infos:
             return False
 
-        # Try direct devices (Bluetooth) before USB receivers, which
-        # require scanning multiple slots with slow timeouts.
-        def _direct_device_first(info):
+        # Try direct devices (Bluetooth) before USB receivers.  For Lightspeed
+        # receivers, prefer the HID++ report collection that actually answers
+        # feature queries; the companion vendor collection often times out.
+        def _candidate_priority(info):
             name = (info.get("product_string") or "").lower()
-            return (1 if "receiver" in name else 0, name)
+            pid = int(info.get("product_id", 0) or 0)
+            up = int(info.get("usage_page", 0) or 0)
+            usage = int(info.get("usage", 0) or 0)
+            is_receiver = "receiver" in name or pid in LIGHTSPEED_RECEIVER_PIDS
+            if pid in LIGHTSPEED_RECEIVER_PIDS and up == 0xFF00:
+                interface_rank = 0 if usage == 0x0002 else 1
+            elif up == 0xFF43 and usage in (0x0204, 0x0302):
+                interface_rank = 0
+            else:
+                interface_rank = 1
+            return (1 if is_receiver else 0, interface_rank, name, usage)
 
-        infos.sort(key=_direct_device_first)
+        infos.sort(key=_candidate_priority)
 
         print(f"[HidGesture] Backend preference: {_BACKEND_PREFERENCE}")
         print(f"[HidGesture] Candidate HID interfaces: {len(infos)}")
@@ -1462,12 +2238,17 @@ class HidGestureListener:
             device_spec = resolve_device(product_id=pid, product_name=product)
             self._feat_idx = None
             self._dpi_idx = None
+            self._dpi_extended = False
             self._smart_shift_idx = None
             self._battery_idx = None
             self._battery_feature_id = None
+            self._onboard_profiles_idx = None
+            self._mouse_button_spy_idx = None
             self._gesture_cid = DEFAULT_GESTURE_CID
             self._gesture_candidates = list(
-                getattr(device_spec, "gesture_cids", ()) or DEFAULT_GESTURE_CIDS
+                getattr(device_spec, "gesture_cids", DEFAULT_GESTURE_CIDS)
+                if device_spec is not None
+                else DEFAULT_GESTURE_CIDS
             )
             self._rawxy_enabled = False
             opened_transport = None
@@ -1527,90 +2308,230 @@ class HidGestureListener:
             if self._dev is None:
                 continue
 
-            # Try Bluetooth direct (0xFF) first, then Bolt receiver slots
-            reprog_found = False
-            hidpp_name = None
-            for idx in (0xFF, 1, 2, 3, 4, 5, 6):
-                self._dev_idx = idx
+            # Build the list of device indices to probe.
+            # For receivers, enumerate paired devices first so we only
+            # query slots that actually have a device (avoids 2 s timeouts
+            # per empty slot on Lightspeed receivers).
+            is_centurion_receiver = pid in LIGHTSPEED_RECEIVER_PIDS
+            is_receiver = is_centurion_receiver or pid == BOLT_RECEIVER_PID
+            receiver_devices = []
+            if is_receiver and not is_centurion_receiver:
+                receiver_devices = self._enumerate_receiver_devices(pid)
+                if receiver_devices:
+                    print(f"[HidGesture] Receiver 0x{pid:04X} paired devices: "
+                          + ", ".join(f"idx={idx} wpid=0x{wpid:04X}"
+                                     for idx, wpid in receiver_devices))
+                else:
+                    print(f"[HidGesture] Receiver 0x{pid:04X} enumerate returned empty; "
+                          "falling back to sequential scan")
+            elif is_centurion_receiver:
+                print(f"[HidGesture] Lightspeed receiver 0x{pid:04X}: "
+                      "skipping slow receiver slot enumeration")
+
+            # Determine which devIdx values to try
+            if receiver_devices:
+                # Only try indices that actually have paired devices
+                probe_indices = [idx for idx, _ in receiver_devices]
+            else:
+                # Default: Bluetooth direct (0xFF) then receiver slots
+                probe_indices = [0xFF, 1, 2, 3, 4, 5, 6]
+
+            # ── Centurion (Lightspeed PRO-series) receiver path ──────
+            if is_centurion_receiver:
+                # Lightspeed receivers use standard HID++ 2.0 on devIdx=0x01.
+                # The sub-device features are accessible directly (no CPL framing
+                # needed on Windows where report ID 0x51 is not exposed).
+                self._is_centurion = False
+                self._dev_idx = 0x01
+                print(f"[HidGesture] Lightspeed receiver 0x{pid:04X}: "
+                      "probing devIdx=0x01 via standard HID++ 2.0")
+
+                hidpp_name = self._query_device_name()
+                if hidpp_name:
+                    print(f"[HidGesture] HID++ device name: '{hidpp_name}'")
+                    device_spec = resolve_device(
+                        product_id=pid, product_name=hidpp_name,
+                    ) or device_spec
+                    self._gesture_candidates = list(
+                        getattr(device_spec, "gesture_cids", DEFAULT_GESTURE_CIDS)
+                        if device_spec is not None
+                        else DEFAULT_GESTURE_CIDS
+                    )
+
+                # Try REPROG_V4 first (some Lightspeed mice may have it)
                 fi = self._find_feature(FEAT_REPROG_V4)
                 if fi is not None:
-                    reprog_found = True
                     self._feat_idx = fi
-                    print(f"[HidGesture] Found REPROG_V4 @0x{fi:02X}  "
-                          f"PID=0x{pid:04X} devIdx=0x{idx:02X}")
-                    # Query actual device name via HID++ (resolves
-                    # USB receivers that report a generic PID/name).
-                    hidpp_name = self._query_device_name()
-                    if hidpp_name:
-                        print(f"[HidGesture] HID++ device name: '{hidpp_name}'")
-                        device_spec = resolve_device(
-                            product_id=pid, product_name=hidpp_name,
-                        ) or device_spec
-                        self._gesture_candidates = list(
-                            getattr(device_spec, "gesture_cids", ())
-                            or DEFAULT_GESTURE_CIDS
-                        )
-                    controls = self._discover_reprog_controls()
-                    self._last_controls = controls
-                    self._gesture_candidates = self._choose_gesture_candidates(
-                        controls,
-                        device_spec=device_spec,
-                    )
-                    print("[HidGesture] Gesture CID candidates: "
-                          + ", ".join(_format_cid(cid) for cid in self._gesture_candidates))
-                    # Also discover ADJUSTABLE_DPI and SMART_SHIFT
-                    dpi_fi = self._find_feature(FEAT_ADJ_DPI)
+                    print(f"[HidGesture] Found REPROG_V4 @0x{fi:02X} on Lightspeed device")
+
+                # Discover ADJ_DPI
+                dpi_fi = self._find_feature(FEAT_ADJ_DPI)
+                if dpi_fi:
+                    self._dpi_idx = dpi_fi
+                    self._dpi_extended = False
+                    print(f"[HidGesture] Found ADJ_DPI @0x{dpi_fi:02X} on Lightspeed device")
+                else:
+                    dpi_fi = self._find_feature(FEAT_EXT_ADJ_DPI)
                     if dpi_fi:
                         self._dpi_idx = dpi_fi
-                        print(f"[HidGesture] Found ADJUSTABLE_DPI @0x{dpi_fi:02X}")
-                    # Prefer 0x2111 (Enhanced) — used by MX Master 3/3S/4 and Logi Options+.
-                    # Fall back to 0x2110 (basic) for older devices.
-                    ss_fi = self._find_feature(FEAT_SMART_SHIFT_ENHANCED)
-                    if ss_fi:
-                        self._smart_shift_idx = ss_fi
-                        self._smart_shift_enhanced = True
-                        print(f"[HidGesture] Found SMART_SHIFT_ENHANCED @0x{ss_fi:02X}")
-                    else:
-                        ss_fi = self._find_feature(FEAT_SMART_SHIFT)
-                        if ss_fi:
-                            self._smart_shift_idx = ss_fi
-                            self._smart_shift_enhanced = False
-                            print(f"[HidGesture] Found SMART_SHIFT (basic) @0x{ss_fi:02X}")
-                    batt_fi = self._find_feature(FEAT_UNIFIED_BATT)
+                        self._dpi_extended = True
+                        print(f"[HidGesture] Found EXT_ADJ_DPI @0x{dpi_fi:02X} on Lightspeed device")
+
+                # Discover battery
+                batt_fi = self._find_feature(FEAT_UNIFIED_BATT)
+                if batt_fi:
+                    self._battery_idx = batt_fi
+                    self._battery_feature_id = FEAT_UNIFIED_BATT
+                    print(f"[HidGesture] Found UNIFIED_BATT @0x{batt_fi:02X} on Lightspeed device")
+                else:
+                    batt_fi = self._find_feature(FEAT_BATTERY_STATUS)
                     if batt_fi:
                         self._battery_idx = batt_fi
-                        self._battery_feature_id = FEAT_UNIFIED_BATT
-                        print(f"[HidGesture] Found UNIFIED_BATT @0x{batt_fi:02X}")
+                        self._battery_feature_id = FEAT_BATTERY_STATUS
+                        print(f"[HidGesture] Found BATTERY_STATUS @0x{batt_fi:02X} on Lightspeed device")
+
+                spy_fi = self._find_feature(FEAT_MOUSE_BUTTON_SPY)
+                if spy_fi:
+                    self._mouse_button_spy_idx = spy_fi
+                    print(f"[HidGesture] Found MOUSE_BUTTON_SPY @0x{spy_fi:02X} on Lightspeed device")
+                self._ensure_g_pro_2_mouser_profile(device_spec)
+
+                # For devices without REPROG_V4 (like G PRO 2 Lightspeed),
+                # connect anyway — button remapping uses OnboardProfiles.
+                has_useful_features = any([
+                    self._feat_idx is not None,
+                    self._dpi_idx is not None,
+                    self._battery_idx is not None,
+                    self._mouse_button_spy_idx is not None,
+                ])
+                if has_useful_features or hidpp_name:
+                    if self._feat_idx is not None:
+                        controls = self._discover_reprog_controls()
+                        self._last_controls = controls
+                        self._gesture_candidates = self._choose_gesture_candidates(
+                            controls,
+                            device_spec=device_spec,
+                        )
+                        print("[HidGesture] Gesture CID candidates: "
+                              + ", ".join(_format_cid(cid) for cid in self._gesture_candidates))
+                        if not self._divert():
+                            print("[HidGesture] Divert failed on Lightspeed device")
+                            # Continue anyway — device is still connected for DPI/battery
                     else:
-                        batt_fi = self._find_feature(FEAT_BATTERY_STATUS)
+                        print("[HidGesture] No REPROG_V4 — gesture/button divert not available")
+                        self._gesture_cid = None
+                        self._rawxy_enabled = False
+
+                    self._connected_device_info = build_connected_device_info(
+                        product_id=pid,
+                        product_name=hidpp_name or product,
+                        transport="Lightspeed",
+                        source=source,
+                        gesture_cids=self._gesture_candidates,
+                    )
+                    print(f"[HidGesture] Lightspeed device connected: "
+                          f"{self._connected_device_info.display_name}")
+                    return True
+
+                print("[HidGesture] Lightspeed device has no useful features, skipping")
+            else:
+                # ── Standard HID++ 2.0 path ────────────────────────────
+                reprog_found = False
+                hidpp_name = None
+                for idx in probe_indices:
+                    self._dev_idx = idx
+                    fi = self._find_feature(FEAT_REPROG_V4)
+                    if fi is not None:
+                        reprog_found = True
+                        self._feat_idx = fi
+                        print(f"[HidGesture] Found REPROG_V4 @0x{fi:02X}  "
+                              f"PID=0x{pid:04X} devIdx=0x{idx:02X}")
+                        # Query actual device name via HID++ (resolves
+                        # USB receivers that report a generic PID/name).
+                        hidpp_name = self._query_device_name()
+                        if hidpp_name:
+                            print(f"[HidGesture] HID++ device name: '{hidpp_name}'")
+                            device_spec = resolve_device(
+                                product_id=pid, product_name=hidpp_name,
+                            ) or device_spec
+                            self._gesture_candidates = list(
+                                getattr(device_spec, "gesture_cids", DEFAULT_GESTURE_CIDS)
+                                if device_spec is not None
+                                else DEFAULT_GESTURE_CIDS
+                            )
+                        controls = self._discover_reprog_controls()
+                        self._last_controls = controls
+                        self._gesture_candidates = self._choose_gesture_candidates(
+                            controls,
+                            device_spec=device_spec,
+                        )
+                        print("[HidGesture] Gesture CID candidates: "
+                              + ", ".join(_format_cid(cid) for cid in self._gesture_candidates))
+                        # Also discover ADJUSTABLE_DPI and SMART_SHIFT
+                        dpi_fi = self._find_feature(FEAT_ADJ_DPI)
+                        if dpi_fi:
+                            self._dpi_idx = dpi_fi
+                            self._dpi_extended = False
+                            print(f"[HidGesture] Found ADJUSTABLE_DPI @0x{dpi_fi:02X}")
+                        else:
+                            dpi_fi = self._find_feature(FEAT_EXT_ADJ_DPI)
+                            if dpi_fi:
+                                self._dpi_idx = dpi_fi
+                                self._dpi_extended = True
+                                print(f"[HidGesture] Found EXTENDED_ADJUSTABLE_DPI @0x{dpi_fi:02X}")
+                        # Prefer 0x2111 (Enhanced) — used by MX Master 3/3S/4 and Logi Options+.
+                        # Fall back to 0x2110 (basic) for older devices.
+                        ss_fi = self._find_feature(FEAT_SMART_SHIFT_ENHANCED)
+                        if ss_fi:
+                            self._smart_shift_idx = ss_fi
+                            self._smart_shift_enhanced = True
+                            print(f"[HidGesture] Found SMART_SHIFT_ENHANCED @0x{ss_fi:02X}")
+                        else:
+                            ss_fi = self._find_feature(FEAT_SMART_SHIFT)
+                            if ss_fi:
+                                self._smart_shift_idx = ss_fi
+                                self._smart_shift_enhanced = False
+                                print(f"[HidGesture] Found SMART_SHIFT (basic) @0x{ss_fi:02X}")
+                        batt_fi = self._find_feature(FEAT_UNIFIED_BATT)
                         if batt_fi:
                             self._battery_idx = batt_fi
-                            self._battery_feature_id = FEAT_BATTERY_STATUS
-                            print(f"[HidGesture] Found BATTERY_STATUS @0x{batt_fi:02X}")
-                    if self._divert():
-                        self._divert_extras()
-                        if idx == BT_DEV_IDX:
-                            actual_transport = "Bluetooth"
-                        elif pid == BOLT_RECEIVER_PID:
-                            actual_transport = "Logi Bolt"
+                            self._battery_feature_id = FEAT_UNIFIED_BATT
+                            print(f"[HidGesture] Found UNIFIED_BATT @0x{batt_fi:02X}")
                         else:
-                            actual_transport = "USB Receiver"
-                        self._connected_device_info = build_connected_device_info(
-                            product_id=pid,
-                            product_name=hidpp_name or product,
-                            transport=actual_transport,
-                            source=source,
-                            gesture_cids=self._gesture_candidates,
-                        )
-                        return True
-                    continue     # divert failed — try next receiver slot
-            if not reprog_found:
-                print(
-                    "[HidGesture] Opened candidate but REPROG_V4 was not found "
-                    f"on tested devIdx values PID=0x{int(pid or 0):04X} "
-                    f"UP=0x{opened_up:04X} usage=0x{opened_usage:04X} "
-                    f"transport={opened_transport or '-'} source={source}"
-                )
+                            batt_fi = self._find_feature(FEAT_BATTERY_STATUS)
+                            if batt_fi:
+                                self._battery_idx = batt_fi
+                                self._battery_feature_id = FEAT_BATTERY_STATUS
+                                print(f"[HidGesture] Found BATTERY_STATUS @0x{batt_fi:02X}")
+                        spy_fi = self._find_feature(FEAT_MOUSE_BUTTON_SPY)
+                        if spy_fi:
+                            self._mouse_button_spy_idx = spy_fi
+                            print(f"[HidGesture] Found MOUSE_BUTTON_SPY @0x{spy_fi:02X}")
+                        self._ensure_g_pro_2_mouser_profile(device_spec)
+                        if self._divert():
+                            self._divert_extras()
+                            if idx == BT_DEV_IDX:
+                                actual_transport = "Bluetooth"
+                            elif pid == BOLT_RECEIVER_PID:
+                                actual_transport = "Logi Bolt"
+                            else:
+                                actual_transport = "USB Receiver"
+                            self._connected_device_info = build_connected_device_info(
+                                product_id=pid,
+                                product_name=hidpp_name or product,
+                                transport=actual_transport,
+                                source=source,
+                                gesture_cids=self._gesture_candidates,
+                            )
+                            return True
+                        continue     # divert failed — try next receiver slot
+                if not reprog_found:
+                    print(
+                        "[HidGesture] Opened candidate but REPROG_V4 was not found "
+                        f"on tested devIdx values PID=0x{int(pid or 0):04X} "
+                        f"UP=0x{opened_up:04X} usage=0x{opened_usage:04X} "
+                        f"transport={opened_transport or '-'} source={source}"
+                    )
 
             # Couldn't use this interface — close and try next
             try:
@@ -1692,9 +2613,13 @@ class HidGestureListener:
             self._dev = None
             self._feat_idx = None
             self._dpi_idx = None
+            self._dpi_extended = False
             self._smart_shift_idx = None
             self._battery_idx = None
             self._battery_feature_id = None
+            self._mouse_button_spy_idx = None
+            self._onboard_profiles_idx = None
+            self._onboard_profiles_restore_mode = None
             self._pending_battery = None
             self._pending_dpi = None
             self._dpi_result = None

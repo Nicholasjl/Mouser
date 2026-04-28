@@ -56,6 +56,25 @@ MX_VERTICAL_BUTTONS = (
     "dpi_switch",
 )
 
+# G PRO gaming mice do not expose MX-style gesture or scroll-mode controls,
+# but the PRO 2 LIGHTSPEED has side buttons plus a bottom DPI cycle button.
+G_PRO_BUTTONS = (
+    "middle",
+    "xbutton1",
+    "xbutton2",
+    "dpi_switch",
+)
+
+# G PRO 2 LIGHTSPEED gaming mice with side buttons and DPI cycle button
+G_PRO_2_LIGHTSPEED_BUTTONS = (
+    "middle",
+    "xbutton1",
+    "xbutton2",
+    "xbutton3",
+    "xbutton4",
+    "dpi_switch",
+)
+
 # Safe minimum for any unrecognised Logitech mouse.
 GENERIC_BUTTONS = (
     "middle",
@@ -191,6 +210,33 @@ KNOWN_LOGI_DEVICES = (
         supported_buttons=MX_ANYWHERE_BUTTONS,
         dpi_max=4000,
     ),
+    LogiDeviceSpec(
+        key="g_pro_2_lightspeed",
+        display_name="G PRO 2 LIGHTSPEED",
+        aliases=(
+            "PRO 2 LIGHTSPEED",
+            "Logitech G PRO 2 LIGHTSPEED",
+            "G Pro 2 Lightspeed",
+            "G PRO X2 Lightspeed",
+            "PRO X2 Lightspeed",
+            "Logitech G PRO X2",
+            "PRO 2 LIGHTSPEED Wireless Gaming Mouse",
+            "Logitech G PRO 2 LIGHTSPEED Wireless Gaming Mouse",
+            "G PRO X2 SUPERLIGHT",
+            "PRO X 2 Superstrike",
+            "PRO X2 SUPERSTRIKE",
+            "Logitech PRO X 2 Superstrike",
+        ),
+        # WPID 0x40BD is reported through the Lightspeed/Centurion receiver;
+        # USB PIDs are seen when the mouse is connected directly.
+        product_ids=(0x40BD, 0xC0A8, 0xC09A),
+        ui_layout="g_pro_2_lightspeed",
+        image_asset="icons/g_pro_2_lightspeed.svg",
+        supported_buttons=G_PRO_2_LIGHTSPEED_BUTTONS,
+        gesture_cids=(),
+        dpi_min=100,
+        dpi_max=32000,
+    ),
 )
 
 
@@ -224,6 +270,8 @@ _LAYOUT_BUTTONS = {
     "mx_master": MX_MASTER_BUTTONS,
     "mx_anywhere": MX_ANYWHERE_BUTTONS,
     "mx_vertical": MX_VERTICAL_BUTTONS,
+    "g_pro": G_PRO_BUTTONS,
+    "g_pro_2_lightspeed": G_PRO_2_LIGHTSPEED_BUTTONS,
     "generic_mouse": GENERIC_BUTTONS,
 }
 

@@ -25,13 +25,15 @@ class _FakeEvdevDevice:
 
 class _CapturingListener:
     def __init__(self, on_down=None, on_up=None, on_move=None,
-                 on_connect=None, on_disconnect=None, extra_diverts=None):
+                 on_connect=None, on_disconnect=None, extra_diverts=None,
+                 on_button_spy=None):
         self.on_down = on_down
         self.on_up = on_up
         self.on_move = on_move
         self.on_connect = on_connect
         self.on_disconnect = on_disconnect
         self.extra_diverts = extra_diverts or {}
+        self.on_button_spy = on_button_spy
         self.connected_device = None
         self.started = False
         self.stopped = False
@@ -349,6 +351,287 @@ class LinuxMouseHookReconnectTests(unittest.TestCase):
                 module.MouseEvent.MODE_SHIFT_UP,
             ],
         )
+
+
+@unittest.skipUnless(sys.platform == "win32", "Windows-only raw input tests")
+class WindowsRawInputExtraButtonTests(unittest.TestCase):
+    def test_raw_programmable_bits_dispatch_side_buttons_and_dpi(self):
+        hook = mouse_hook.MouseHook()
+        hook._connected_device = SimpleNamespace(
+            key="g_pro_2_lightspeed",
+            supported_buttons=(
+                "xbutton1", "xbutton2", "xbutton3", "xbutton4", "dpi_switch",
+            ),
+        )
+        hdevice = object()
+
+        hook._process_raw_mouse_button_state(hdevice, 0x08)
+        hook._process_raw_mouse_button_state(hdevice, 0x18)
+        hook._process_raw_mouse_button_state(hdevice, 0x10)
+        hook._process_raw_mouse_button_state(hdevice, 0x00)
+        hook._process_raw_mouse_button_state(hdevice, 0x20)
+        hook._process_raw_mouse_button_state(hdevice, 0x60)
+        hook._process_raw_mouse_button_state(hdevice, 0x40)
+        hook._process_raw_mouse_button_state(hdevice, 0x00)
+        hook._process_raw_mouse_button_state(hdevice, 0x80)
+        hook._process_raw_mouse_button_state(hdevice, 0x00)
+
+        events = []
+        while not hook._dispatch_queue.empty():
+            events.append(hook._dispatch_queue.get_nowait())
+
+        self.assertEqual(
+            [event.event_type for event in events],
+            [
+                mouse_hook.MouseEvent.XBUTTON1_DOWN,
+                mouse_hook.MouseEvent.XBUTTON2_DOWN,
+                mouse_hook.MouseEvent.XBUTTON1_UP,
+                mouse_hook.MouseEvent.XBUTTON2_UP,
+                mouse_hook.MouseEvent.XBUTTON3_DOWN,
+                mouse_hook.MouseEvent.XBUTTON4_DOWN,
+                mouse_hook.MouseEvent.XBUTTON3_UP,
+                mouse_hook.MouseEvent.XBUTTON4_UP,
+                mouse_hook.MouseEvent.DPI_SWITCH_DOWN,
+                mouse_hook.MouseEvent.DPI_SWITCH_UP,
+            ],
+        )
+        self.assertEqual(events[0].raw_data["source"], "raw_input")
+        self.assertEqual(events[0].raw_data["button"], "xbutton1")
+
+    def test_raw_extra_bits_still_work_when_hid_detection_is_available(self):
+        hook = mouse_hook.MouseHook()
+        hook._connected_device = SimpleNamespace(
+            key="g_pro_2_lightspeed",
+            supported_buttons=("xbutton3", "xbutton4")
+        )
+        hook._hid_gesture = SimpleNamespace()
+        hook._device_connected = True
+
+        hook._process_raw_mouse_button_state(object(), 0x20)
+
+        self.assertFalse(hook._dispatch_queue.empty())
+        event = hook._dispatch_queue.get_nowait()
+        self.assertEqual(event.event_type, mouse_hook.MouseEvent.XBUTTON3_DOWN)
+
+    def test_raw_button_flags_dispatch_xbutton1_and_xbutton2(self):
+        hook = mouse_hook.MouseHook()
+        hook._connected_device = SimpleNamespace(
+            key="g_pro_2_lightspeed",
+            supported_buttons=("xbutton1", "xbutton2")
+        )
+
+        hook._queue_raw_button_flag_events(
+            mouse_hook.RI_MOUSE_BUTTON_4_DOWN
+            | mouse_hook.RI_MOUSE_BUTTON_5_DOWN
+        )
+        hook._queue_raw_button_flag_events(
+            mouse_hook.RI_MOUSE_BUTTON_4_UP
+            | mouse_hook.RI_MOUSE_BUTTON_5_UP
+        )
+
+        events = []
+        while not hook._dispatch_queue.empty():
+            events.append(hook._dispatch_queue.get_nowait())
+
+        self.assertEqual(
+            [event.event_type for event in events],
+            [
+                mouse_hook.MouseEvent.XBUTTON1_DOWN,
+                mouse_hook.MouseEvent.XBUTTON2_DOWN,
+                mouse_hook.MouseEvent.XBUTTON1_UP,
+                mouse_hook.MouseEvent.XBUTTON2_UP,
+            ],
+        )
+        self.assertEqual(events[0].raw_data["source"], "raw_input_flags")
+
+    def test_raw_extra_bits_keep_legacy_gesture_fallback_without_side_buttons(self):
+        hook = mouse_hook.MouseHook()
+        seen = []
+        hook.register(
+            mouse_hook.MouseEvent.GESTURE_CLICK,
+            lambda event: seen.append(event.event_type),
+        )
+        hdevice = object()
+
+        hook._process_raw_mouse_button_state(hdevice, 0x20)
+        hook._process_raw_mouse_button_state(hdevice, 0x00)
+
+        self.assertEqual(seen, [mouse_hook.MouseEvent.GESTURE_CLICK])
+
+    def test_raw_and_low_level_duplicate_events_are_collapsed(self):
+        hook = mouse_hook.MouseHook()
+        low_event = mouse_hook.MouseEvent(mouse_hook.MouseEvent.XBUTTON1_DOWN)
+        raw_event = mouse_hook.MouseEvent(
+            mouse_hook.MouseEvent.XBUTTON1_DOWN,
+            {"source": "raw_input", "button": "xbutton1"},
+        )
+
+        self.assertTrue(hook._queue_mouse_event(low_event, "low_level"))
+        self.assertFalse(hook._queue_mouse_event(raw_event, "raw_input"))
+
+        events = []
+        while not hook._dispatch_queue.empty():
+            events.append(hook._dispatch_queue.get_nowait().event_type)
+
+        self.assertEqual(events, [mouse_hook.MouseEvent.XBUTTON1_DOWN])
+
+    def test_hidpp_button_spy_dispatches_side_and_dpi_buttons(self):
+        hook = mouse_hook.MouseHook()
+        hook._connected_device = SimpleNamespace(
+            key="g_pro_2_lightspeed",
+            supported_buttons=(
+                "xbutton1", "xbutton2", "xbutton3", "xbutton4", "dpi_switch",
+            ),
+        )
+        hook._hid_gesture = SimpleNamespace(mouse_button_spy_index=0x10)
+        hdevice = object()
+
+        hook._process_raw_hid_report(
+            hdevice,
+            bytes([0x11, 0x01, 0x10, 0x00, 0x00, 0x08] + [0x00] * 14),
+        )
+        hook._process_raw_hid_report(
+            hdevice,
+            bytes([0x11, 0x01, 0x10, 0x00, 0x00, 0x28] + [0x00] * 14),
+        )
+        hook._process_raw_hid_report(
+            hdevice,
+            bytes([0x11, 0x01, 0x10, 0x00, 0x00, 0xA8] + [0x00] * 14),
+        )
+        hook._process_raw_hid_report(
+            hdevice,
+            bytes([0x11, 0x01, 0x10, 0x00, 0x00, 0x00] + [0x00] * 14),
+        )
+
+        events = []
+        while not hook._dispatch_queue.empty():
+            events.append(hook._dispatch_queue.get_nowait())
+
+        self.assertEqual(
+            [event.event_type for event in events],
+            [
+                mouse_hook.MouseEvent.XBUTTON1_DOWN,
+                mouse_hook.MouseEvent.XBUTTON3_DOWN,
+                mouse_hook.MouseEvent.DPI_SWITCH_DOWN,
+                mouse_hook.MouseEvent.XBUTTON1_UP,
+                mouse_hook.MouseEvent.XBUTTON3_UP,
+                mouse_hook.MouseEvent.DPI_SWITCH_UP,
+            ],
+        )
+        self.assertEqual(events[0].raw_data["source"], "hidpp_button_spy")
+        self.assertEqual(events[2].raw_data["mask"], 0x0080)
+
+    def test_hidpp_button_spy_listener_callback_dispatches_dpi_alias(self):
+        hook = mouse_hook.MouseHook()
+        hook._connected_device = SimpleNamespace(key="g_pro_2_lightspeed")
+
+        hook._on_hid_button_spy(0x0080, feat_idx=0x10, func_sw=0x00)
+        hook._on_hid_button_spy(0x0000, feat_idx=0x10, func_sw=0x00)
+
+        events = []
+        while not hook._dispatch_queue.empty():
+            events.append(hook._dispatch_queue.get_nowait())
+
+        self.assertEqual(
+            [event.event_type for event in events],
+            [
+                mouse_hook.MouseEvent.DPI_SWITCH_DOWN,
+                mouse_hook.MouseEvent.DPI_SWITCH_UP,
+            ],
+        )
+        self.assertEqual(events[0].raw_data["source"], "hidpp_button_spy")
+        self.assertEqual(events[0].raw_data["feature_index"], 0x10)
+
+    def test_hidpp_button_spy_ignores_unexpected_feature_index(self):
+        hook = mouse_hook.MouseHook()
+        hook._connected_device = SimpleNamespace(key="g_pro_2_lightspeed")
+        hook._hid_gesture = SimpleNamespace(mouse_button_spy_index=0x10)
+
+        handled = hook._process_raw_hid_report(
+            object(),
+            bytes([0x11, 0x01, 0x07, 0x00, 0x00, 0x08] + [0x00] * 14),
+        )
+
+        self.assertFalse(handled)
+        self.assertTrue(hook._dispatch_queue.empty())
+
+    def test_consumer_control_report_dispatches_dpi_switch(self):
+        hook = mouse_hook.MouseHook()
+        hook._connected_device = SimpleNamespace(key="g_pro_2_lightspeed")
+        hdevice = object()
+
+        hook._process_raw_hid_report(hdevice, bytes([0x03, 0xFD, 0x00, 0x00, 0x00]))
+        hook._process_raw_hid_report(hdevice, bytes([0x03, 0x00, 0x00, 0x00, 0x00]))
+
+        events = []
+        while not hook._dispatch_queue.empty():
+            events.append(hook._dispatch_queue.get_nowait())
+
+        self.assertEqual(
+            [event.event_type for event in events],
+            [
+                mouse_hook.MouseEvent.DPI_SWITCH_DOWN,
+                mouse_hook.MouseEvent.DPI_SWITCH_UP,
+            ],
+        )
+        self.assertEqual(events[0].raw_data["source"], "consumer_control")
+
+    def test_consumer_control_report_dispatches_g_pro_2_right_side_buttons(self):
+        hook = mouse_hook.MouseHook()
+        hook._connected_device = SimpleNamespace(key="g_pro_2_lightspeed")
+        hdevice = object()
+
+        hook._process_raw_hid_report(hdevice, bytes([0x03, 0xF1, 0x03, 0xF2, 0x03]))
+        hook._process_raw_hid_report(hdevice, bytes([0x03, 0x00, 0x00, 0x00, 0x00]))
+
+        events = []
+        while not hook._dispatch_queue.empty():
+            events.append(hook._dispatch_queue.get_nowait())
+
+        self.assertEqual(
+            [event.event_type for event in events],
+            [
+                mouse_hook.MouseEvent.XBUTTON3_DOWN,
+                mouse_hook.MouseEvent.XBUTTON4_DOWN,
+                mouse_hook.MouseEvent.XBUTTON3_UP,
+                mouse_hook.MouseEvent.XBUTTON4_UP,
+            ],
+        )
+        self.assertEqual(events[0].raw_data["source"], "consumer_control")
+
+    def test_consumer_control_report_accepts_big_endian_profile_usages(self):
+        hook = mouse_hook.MouseHook()
+        hook._connected_device = SimpleNamespace(key="g_pro_2_lightspeed")
+        hdevice = object()
+
+        hook._process_raw_hid_report(hdevice, bytes([0x03, 0x03, 0xF1, 0x03, 0xF2]))
+        hook._process_raw_hid_report(hdevice, bytes([0x03, 0x00, 0x00, 0x00, 0x00]))
+
+        events = []
+        while not hook._dispatch_queue.empty():
+            events.append(hook._dispatch_queue.get_nowait())
+
+        self.assertEqual(
+            [event.event_type for event in events],
+            [
+                mouse_hook.MouseEvent.XBUTTON3_DOWN,
+                mouse_hook.MouseEvent.XBUTTON4_DOWN,
+                mouse_hook.MouseEvent.XBUTTON3_UP,
+                mouse_hook.MouseEvent.XBUTTON4_UP,
+            ],
+        )
+
+    def test_consumer_control_report_ignores_hidpp_traffic_without_report_id_3(self):
+        hook = mouse_hook.MouseHook()
+        hook._connected_device = SimpleNamespace(key="g_pro_2_lightspeed")
+
+        handled = hook._process_raw_hid_report(
+            object(),
+            bytes([0x12, 0x01, 0x0F, 0x00, 0x03, 0xF1, 0x03, 0xF2]),
+        )
+
+        self.assertFalse(handled)
+        self.assertTrue(hook._dispatch_queue.empty())
 
 
 @unittest.skipUnless(sys.platform == "darwin", "macOS-only tests")

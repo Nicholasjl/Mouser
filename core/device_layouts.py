@@ -206,11 +206,85 @@ MX_VERTICAL_LAYOUT = {
 }
 
 
+G_PRO_2_LIGHTSPEED_LAYOUT = {
+    "key": "g_pro_2_lightspeed",
+    "label": "G PRO 2 LIGHTSPEED",
+    "image_asset": "icons/g_pro_2_lightspeed.svg",
+    "image_width": 220,
+    "image_height": 220,
+    "interactive": False,
+    "manual_selectable": True,
+    "note": "G PRO 2 Lightspeed Gaming Mouse with 4 side buttons and DPI switch",
+    "hotspots": [
+        {
+            "buttonKey": "middle",
+            "label": "Middle button",
+            "summaryType": "mapping",
+            "normX": 0.50,
+            "normY": 0.45,
+            "labelSide": "bottom",
+            "labelOffX": 0,
+            "labelOffY": -30,
+        },
+        {
+            "buttonKey": "xbutton1",
+            "label": "Left-back",
+            "summaryType": "mapping",
+            "normX": 0.18,
+            "normY": 0.45,
+            "labelSide": "left",
+            "labelOffX": -80,
+            "labelOffY": 10,
+        },
+        {
+            "buttonKey": "xbutton2",
+            "label": "Left-front",
+            "summaryType": "mapping",
+            "normX": 0.18,
+            "normY": 0.35,
+            "labelSide": "left",
+            "labelOffX": -80,
+            "labelOffY": -10,
+        },
+        {
+            "buttonKey": "xbutton3",
+            "label": "Right-back",
+            "summaryType": "mapping",
+            "normX": 0.82,
+            "normY": 0.45,
+            "labelSide": "right",
+            "labelOffX": 80,
+            "labelOffY": 10,
+        },
+        {
+            "buttonKey": "xbutton4",
+            "label": "Right-front",
+            "summaryType": "mapping",
+            "normX": 0.82,
+            "normY": 0.35,
+            "labelSide": "right",
+            "labelOffX": 80,
+            "labelOffY": -10,
+        },
+        {
+            "buttonKey": "dpi_switch",
+            "label": "DPI switch",
+            "summaryType": "mapping",
+            "normX": 0.50,
+            "normY": 0.85,
+            "labelSide": "bottom",
+            "labelOffX": 0,
+            "labelOffY": -20,
+        },
+    ],
+}
+
 DEVICE_LAYOUTS = {
     "mx_master": MX_MASTER_LAYOUT,
     "mx_anywhere": MX_ANYWHERE_LAYOUT,
     "mx_vertical": MX_VERTICAL_LAYOUT,
     "generic_mouse": GENERIC_MOUSE_LAYOUT,
+    "g_pro_2_lightspeed": G_PRO_2_LIGHTSPEED_LAYOUT,
 }
 
 # Maps a device-specific key like "mx_master_3s" to its family layout key.
@@ -224,6 +298,7 @@ _FAMILY_FALLBACKS = {
     "mx_anywhere_3s": "mx_anywhere",
     "mx_anywhere_3": "mx_anywhere",
     "mx_anywhere_2s": "mx_anywhere",
+    "g_pro_2_lightspeed": "g_pro_2_lightspeed",
 }
 
 

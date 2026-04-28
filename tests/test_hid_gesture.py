@@ -1,6 +1,6 @@
 import unittest
 from types import SimpleNamespace
-from unittest.mock import Mock, patch
+from unittest.mock import Mock, call, patch
 
 from core import hid_gesture
 
@@ -248,8 +248,156 @@ class HidRequestTransportFailureTests(unittest.TestCase):
         self.assertEqual(listener._consecutive_request_timeouts, 1)
 
 
+class HidButtonSpyReportTests(unittest.TestCase):
+    def test_mouse_button_spy_report_invokes_callback(self):
+        callback = Mock()
+        listener = hid_gesture.HidGestureListener(on_button_spy=callback)
+        listener._mouse_button_spy_idx = 0x10
+
+        listener._on_report([0x11, 0x01, 0x10, 0x00, 0x00, 0x80] + [0x00] * 14)
+
+        callback.assert_called_once_with(0x0080, feat_idx=0x10, func_sw=0x00)
+
+    def test_mouse_button_spy_ignores_matching_request_responses(self):
+        callback = Mock()
+        listener = hid_gesture.HidGestureListener(on_button_spy=callback)
+        listener._mouse_button_spy_idx = 0x10
+
+        listener._on_report([0x11, 0x01, 0x10, 0x0A, 0x00, 0x80] + [0x00] * 14)
+
+        callback.assert_not_called()
+
+    def test_mouse_button_spy_accepts_nonzero_function_notifications(self):
+        callback = Mock()
+        listener = hid_gesture.HidGestureListener(on_button_spy=callback)
+        listener._mouse_button_spy_idx = 0x10
+
+        listener._on_report([0x11, 0x01, 0x10, 0x10, 0x00, 0x20] + [0x00] * 14)
+
+        callback.assert_called_once_with(0x0020, feat_idx=0x10, func_sw=0x10)
+
+
+class HidOnboardProfileModeTests(unittest.TestCase):
+    def test_g_pro_2_mouser_profile_patches_independent_button_slots(self):
+        base = bytearray([0xFF] * 255)
+        profile = hid_gesture._build_g_pro_2_mouser_profile(bytes(base), 255)
+
+        self.assertEqual(profile[0x44:0x48], b"\x80\x03\x00\xFD")
+        self.assertEqual(profile[0x48:0x4C], b"\x80\x03\x03\xF1")
+        self.assertEqual(profile[0x4C:0x50], b"\x80\x03\x03\xF2")
+        self.assertEqual(
+            profile[-2:],
+            hid_gesture._crc16(profile[:-2]).to_bytes(2, "big"),
+        )
+
+    def test_control_sector_adds_mouser_profile_and_preserves_headers(self):
+        payload = hid_gesture._build_onboard_control_sector(
+            255,
+            0x0002,
+            headers=[(0x0101, 0x01), (0x0003, 0x00)],
+            max_profiles=5,
+        )
+
+        self.assertEqual(payload[:12], b"\x00\x02\x01\x00\x01\x01\x01\x00\x00\x03\x00\x00")
+        self.assertEqual(payload[12:16], b"\xFF\xFF\x00\x00")
+        self.assertEqual(
+            payload[-2:],
+            hid_gesture._crc16(payload[:-2]).to_bytes(2, "big"),
+        )
+
+    def test_g_pro_2_installs_mouser_profile_and_activates_it(self):
+        listener = hid_gesture.HidGestureListener()
+        listener._dev = object()
+        device_spec = SimpleNamespace(key="g_pro_2_lightspeed")
+        info = {"size": 255, "sectors": 16, "count": 5}
+        base = bytearray([0xFF] * 255)
+        control = bytearray([0xFF] * 255)
+        control[0:4] = b"\x01\x01\x01\x00"
+        control[4:8] = b"\xFF\xFF\x00\x00"
+
+        def fake_read_sector(sector, size):
+            if sector == hid_gesture.G_PRO_2_ROM_PROFILE_SECTOR:
+                return bytes(base)
+            if sector == 0x0000:
+                return bytes(control)
+            return bytes([0x00] * size)
+
+        with (
+            patch.object(listener, "_find_feature", return_value=0x0F),
+            patch.object(listener, "_read_onboard_profile_info", return_value=info),
+            patch.object(listener, "_read_onboard_sector", side_effect=fake_read_sector),
+            patch.object(listener, "_write_onboard_sector", return_value=True) as write_mock,
+            patch.object(listener, "_set_onboard_profile_mode", return_value=True) as mode_mock,
+            patch.object(listener, "_set_active_onboard_profile", return_value=True) as active_mock,
+        ):
+            self.assertTrue(listener._ensure_g_pro_2_mouser_profile(device_spec))
+
+        self.assertEqual(listener._onboard_profiles_idx, 0x0F)
+        self.assertEqual(write_mock.call_args_list[0].args[0], 0x0002)
+        self.assertEqual(write_mock.call_args_list[1].args[0], 0x0000)
+        mode_mock.assert_called_once_with(0x01)
+        active_mock.assert_called_once_with(0x0002)
+
+    def test_onboard_profile_mode_restore_reenables_previous_mode(self):
+        listener = hid_gesture.HidGestureListener()
+        listener._dev = object()
+        listener._onboard_profiles_idx = 0x0F
+        listener._onboard_profiles_restore_mode = 0x01
+
+        with patch.object(
+            listener,
+            "_request",
+            return_value=(1, 0x0F, 1, 0x0A, [0x00]),
+        ) as req_mock:
+            self.assertTrue(listener._restore_onboard_profiles())
+
+        req_mock.assert_called_once_with(0x0F, 1, [0x01], timeout_ms=600)
+        self.assertIsNone(listener._onboard_profiles_restore_mode)
+
+
 class HidBoltReceiverTests(unittest.TestCase):
     """Tests for Logi Bolt receiver support."""
+
+    def test_lightspeed_receiver_skips_slow_slot_enumeration(self):
+        listener = hid_gesture.HidGestureListener()
+        info = {
+            "product_id": 0xC54D,
+            "usage_page": 0xFF00,
+            "usage": 0x0002,
+            "source": "hidapi-enumerate",
+            "product_string": "USB Receiver",
+            "path": b"/dev/hidraw-test",
+        }
+        fake_dev = _FakeHidDevice()
+
+        def fake_find_feature(feature_id):
+            if feature_id == hid_gesture.FEAT_MOUSE_BUTTON_SPY:
+                return 0x10
+            if feature_id == hid_gesture.FEAT_UNIFIED_BATT:
+                return 0x07
+            return None
+
+        with (
+            patch.object(listener, "_vendor_hid_infos", return_value=[info]),
+            patch.object(listener, "_query_device_name", return_value="PRO 2 LIGHTSPEED"),
+            patch.object(listener, "_find_feature", side_effect=fake_find_feature),
+            patch.object(listener, "_enumerate_receiver_devices") as enum_mock,
+            patch.object(hid_gesture, "HIDAPI_OK", True),
+            patch.object(hid_gesture, "_BACKEND_PREFERENCE", "hidapi"),
+            patch.object(hid_gesture, "_HID_API_STYLE", "hidapi"),
+            patch.object(
+                hid_gesture,
+                "_hid",
+                SimpleNamespace(device=lambda: fake_dev),
+                create=True,
+            ),
+            patch("builtins.print"),
+        ):
+            self.assertTrue(listener._try_connect())
+
+        enum_mock.assert_not_called()
+        self.assertEqual(listener.connected_device.key, "g_pro_2_lightspeed")
+        self.assertEqual(listener.mouse_button_spy_index, 0x10)
 
     def test_divert_failure_continues_to_next_receiver_slot(self):
         """When divert fails on one slot (e.g. keyboard), the loop
@@ -460,6 +608,46 @@ class HidReconnectInvariantTests(unittest.TestCase):
         self.assertFalse(listener._extra_diverts[0x00C4]["held"])
         gesture_up.assert_called_once_with()
         extra_up.assert_called_once_with()
+
+
+class HidDpiTests(unittest.TestCase):
+    def test_parse_extended_dpi_response_prefers_current_value(self):
+        listener = hid_gesture.HidGestureListener()
+        listener._dpi_extended = True
+
+        self.assertEqual(
+            listener._parse_dpi_response([0x00, 0x03, 0x20, 0x04, 0xB0, 0x03, 0x20]),
+            800,
+        )
+
+    def test_parse_extended_dpi_response_falls_back_to_default_value(self):
+        listener = hid_gesture.HidGestureListener()
+        listener._dpi_extended = True
+
+        self.assertEqual(
+            listener._parse_dpi_response([0x00, 0x00, 0x00, 0x04, 0xB0]),
+            1200,
+        )
+
+    def test_apply_extended_dpi_writes_x_and_y(self):
+        listener = hid_gesture.HidGestureListener()
+        listener._dpi_idx = 0x09
+        listener._dpi_extended = True
+        listener._dev = object()
+        listener._pending_dpi = 800
+
+        with patch.object(
+            listener,
+            "_request",
+            return_value=(1, 0x09, 6, 0x0A, [0, 3, 32, 3, 32]),
+        ) as request_mock:
+            listener._apply_pending_dpi()
+
+        request_mock.assert_called_once_with(
+            0x09, 6, [0x00, 0x03, 0x20, 0x03, 0x20, 0x02]
+        )
+        self.assertIsNone(listener._pending_dpi)
+        self.assertTrue(listener._dpi_result)
 
 
 if __name__ == "__main__":
