@@ -330,6 +330,58 @@ class EngineReplayPhaseOneTests(unittest.TestCase):
             },
         )
 
+    def test_cycle_dpi_uses_preset_index_fast_path_when_available(self):
+        engine = self._make_engine()
+        engine.hook.connected_device = SimpleNamespace(
+            name="G PRO 2 LIGHTSPEED", dpi_min=100, dpi_max=44000
+        )
+        presets = [1200, 44000, 1200, 44000]
+        engine.cfg["settings"]["dpi"] = 1200
+        engine.cfg["settings"]["dpi_presets"] = presets
+        engine.hook._hid_gesture = SimpleNamespace(
+            set_dpi=Mock(return_value=True),
+            set_dpi_preset_index=Mock(return_value=True),
+        )
+        threads = []
+
+        with (
+            patch("core.engine.save_config"),
+            patch("core.engine.threading.Thread", side_effect=self._thread_factory(threads)),
+        ):
+            engine._cycle_dpi()
+
+        self.assertEqual(engine.cfg["settings"]["dpi"], 44000)
+        self.assertEqual(len(threads), 1)
+        threads[0].run_target()
+        engine.hook._hid_gesture.set_dpi_preset_index.assert_called_once_with(
+            44000, presets, 1
+        )
+        engine.hook._hid_gesture.set_dpi.assert_not_called()
+
+    def test_replay_preloads_dpi_presets_when_fast_path_available(self):
+        engine = self._make_engine()
+        engine.hook.connected_device = SimpleNamespace(
+            name="G PRO 2 LIGHTSPEED", dpi_min=100, dpi_max=44000
+        )
+        presets = [1200, 44000, 1200, 44000]
+        engine.cfg["settings"]["dpi"] = 44000
+        engine.cfg["settings"]["dpi_presets"] = presets
+        engine.hook._hid_gesture = SimpleNamespace(
+            connected_device=SimpleNamespace(name="G PRO 2 LIGHTSPEED"),
+            set_dpi=Mock(return_value=True),
+            set_dpi_preset_index=Mock(return_value=True),
+            set_smart_shift=Mock(return_value=True),
+            smart_shift_supported=False,
+        )
+
+        with patch("core.engine.time.sleep", return_value=None):
+            self.assertTrue(engine._run_saved_settings_replay())
+
+        engine.hook._hid_gesture.set_dpi_preset_index.assert_called_once_with(
+            44000, presets, 1
+        )
+        engine.hook._hid_gesture.set_dpi.assert_not_called()
+
     def test_evdev_only_connected_true_does_not_request_replay_worker(self):
         engine = self._make_engine()
         engine.hook.connected_device = SimpleNamespace(name="MX Master 3S", source="evdev")

@@ -305,6 +305,23 @@ class HidOnboardProfileModeTests(unittest.TestCase):
             hid_gesture._crc16(profile[:-2]).to_bytes(2, "big"),
         )
 
+    def test_g_pro_2_mouser_profile_patches_dpi_preset_slots(self):
+        base = bytearray([0xFF] * 255)
+        profile = hid_gesture._build_g_pro_2_mouser_profile(
+            bytes(base),
+            255,
+            dpi_slots=[1200, 44000, 1600, 3200],
+            active_index=1,
+        )
+
+        expected_slots = [1200, 44000, 1600, 3200, 3200]
+        self.assertEqual(profile[0x01:0x04], b"\x01\x01\x00")
+        self.assertEqual(
+            hid_gesture._read_g_pro_2_profile_dpi_slots(profile),
+            expected_slots,
+        )
+        self.assertEqual(hid_gesture._read_g_pro_2_profile_dpi(profile), 44000)
+
     def test_read_g_pro_2_profile_dpi_uses_default_slot(self):
         profile = bytearray([0xFF] * 255)
         profile[0x01] = 2
@@ -375,6 +392,73 @@ class HidOnboardProfileModeTests(unittest.TestCase):
             listener._connected_device_info, dpi=44000
         )
         dpi_index_mock.assert_called_once_with(0)
+
+    def test_g_pro_2_preset_index_uses_cached_slots_without_profile_write(self):
+        listener = hid_gesture.HidGestureListener()
+        listener._connected_device_info = SimpleNamespace(
+            key="g_pro_2_lightspeed", dpi_min=100, dpi_max=44000
+        )
+        listener._g_pro_2_cached_dpi_slots = [1200, 44000, 1200, 44000, 44000]
+
+        with (
+            patch.object(listener, "_write_g_pro_2_mouser_profile") as write_mock,
+            patch.object(listener, "_set_onboard_current_dpi_index", return_value=True) as dpi_index_mock,
+        ):
+            self.assertTrue(
+                listener._set_g_pro_2_onboard_dpi_preset_index(
+                    44000, [1200, 44000, 1200, 44000], 1
+                )
+            )
+
+        write_mock.assert_not_called()
+        dpi_index_mock.assert_called_once_with(1)
+
+    def test_g_pro_2_preset_index_syncs_profile_when_slots_change(self):
+        listener = hid_gesture.HidGestureListener()
+        listener._connected_device_info = SimpleNamespace(
+            key="g_pro_2_lightspeed", dpi_min=100, dpi_max=44000
+        )
+
+        with (
+            patch.object(listener, "_write_g_pro_2_mouser_profile", return_value=True) as write_mock,
+            patch.object(listener, "_set_onboard_current_dpi_index", return_value=True) as dpi_index_mock,
+        ):
+            self.assertTrue(
+                listener._set_g_pro_2_onboard_dpi_preset_index(
+                    44000, [1200, 44000, 1200, 44000], 1
+                )
+            )
+
+        write_mock.assert_called_once_with(
+            listener._connected_device_info,
+            dpi_slots=[1200, 44000, 1200, 44000, 44000],
+            active_index=1,
+        )
+        dpi_index_mock.assert_called_once_with(1)
+
+    def test_g_pro_2_preset_command_failure_does_not_use_full_write_fallback(self):
+        listener = hid_gesture.HidGestureListener()
+        listener._connected_device_info = SimpleNamespace(
+            key="g_pro_2_lightspeed", dpi_min=100, dpi_max=44000
+        )
+        listener._dpi_idx = 0x0B
+        listener._dev = object()
+        listener._pending_dpi = {
+            "kind": "preset_index",
+            "dpi": 44000,
+            "presets": (1200, 44000),
+            "index": 1,
+        }
+
+        with (
+            patch.object(listener, "_set_g_pro_2_onboard_dpi_preset_index", return_value=False),
+            patch.object(listener, "_set_g_pro_2_onboard_dpi") as full_write_mock,
+        ):
+            listener._apply_pending_dpi()
+
+        full_write_mock.assert_not_called()
+        self.assertFalse(listener._dpi_result)
+        self.assertIsNone(listener._pending_dpi)
 
     def test_g_pro_2_onboard_dpi_fails_when_current_slot_cannot_be_applied(self):
         listener = hid_gesture.HidGestureListener()

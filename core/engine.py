@@ -282,6 +282,18 @@ class Engine:
 
     _DEFAULT_DPI_PRESETS = [800, 1200, 1600, 2400]
 
+    def _dpi_presets(self):
+        return self.cfg.get("settings", {}).get(
+            "dpi_presets", list(self._DEFAULT_DPI_PRESETS)
+        ) or list(self._DEFAULT_DPI_PRESETS)
+
+    def _dpi_preset_index(self, dpi, presets):
+        clamped_dpi = clamp_dpi(dpi, self.connected_device)
+        for idx, value in enumerate(presets):
+            if clamp_dpi(value, self.connected_device) == clamped_dpi:
+                return idx
+        return 0
+
     def _cycle_dpi(self):
         """Cycle through user-configured DPI presets.
 
@@ -290,7 +302,7 @@ class Engine:
         the UI, and writes to the device off-thread.
         """
         settings = self.cfg.setdefault("settings", {})
-        presets = settings.get("dpi_presets") or list(self._DEFAULT_DPI_PRESETS)
+        presets = self._dpi_presets()
         if not presets:
             return
         current_dpi = settings.get("dpi", 1000)
@@ -311,7 +323,10 @@ class Engine:
         hg = self.hook._hid_gesture
         if hg:
             def _write():
-                hg.set_dpi(new_dpi)
+                if hasattr(hg, "set_dpi_preset_index"):
+                    hg.set_dpi_preset_index(new_dpi, presets, next_idx)
+                else:
+                    hg.set_dpi(new_dpi)
             threading.Thread(target=_write, daemon=True, name="CycleDPI").start()
 
     def _make_hscroll_handler(self, action_id):
@@ -503,7 +518,19 @@ class Engine:
             return False
 
         if saved_dpi is not None:
-            if not hasattr(hg, "set_dpi"):
+            dpi_presets = self._dpi_presets()
+            dpi_index = self._dpi_preset_index(saved_dpi, dpi_presets)
+            if hasattr(hg, "set_dpi_preset_index"):
+                if hg.set_dpi_preset_index(saved_dpi, dpi_presets, dpi_index):
+                    if self._dpi_read_cb:
+                        try:
+                            self._dpi_read_cb(saved_dpi)
+                        except Exception:
+                            pass
+                else:
+                    replay_ok = False
+                    retry_dpi = True
+            elif not hasattr(hg, "set_dpi"):
                 replay_ok = False
             elif hg.set_dpi(saved_dpi):
                 if self._dpi_read_cb:
@@ -534,7 +561,15 @@ class Engine:
             if hg is None or getattr(hg, "connected_device", None) is None:
                 return False
             if retry_dpi:
-                if not hasattr(hg, "set_dpi") or not hg.set_dpi(saved_dpi):
+                dpi_presets = self._dpi_presets()
+                dpi_index = self._dpi_preset_index(saved_dpi, dpi_presets)
+                if hasattr(hg, "set_dpi_preset_index"):
+                    retry_ok = hg.set_dpi_preset_index(
+                        saved_dpi, dpi_presets, dpi_index
+                    )
+                else:
+                    retry_ok = hasattr(hg, "set_dpi") and hg.set_dpi(saved_dpi)
+                if not retry_ok:
                     replay_ok = False
                 elif self._dpi_read_cb:
                     try:

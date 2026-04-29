@@ -673,23 +673,33 @@ def _build_onboard_control_sector(size, profile_sector, headers=None, max_profil
 
 
 def _read_g_pro_2_profile_dpi(profile):
-    if not profile:
+    slots = _read_g_pro_2_profile_dpi_slots(profile)
+    if not slots:
         return None
+    default_idx = int(profile[G_PRO_2_PROFILE_DPI_DEFAULT_INDEX_OFFSET])
+    indices = []
+    if 0 <= default_idx < len(slots):
+        indices.append(default_idx)
+    indices.extend(idx for idx in range(len(slots)) if idx not in indices)
+    for idx in indices:
+        dpi = slots[idx]
+        if dpi:
+            return dpi
+    return None
+
+
+def _read_g_pro_2_profile_dpi_slots(profile):
+    if not profile:
+        return []
     min_size = (
         G_PRO_2_PROFILE_DPI_RESOLUTIONS_OFFSET
         + G_PRO_2_PROFILE_DPI_SLOTS * G_PRO_2_PROFILE_DPI_SLOT_SIZE
     )
     if len(profile) < min_size:
-        return None
+        return []
 
-    default_idx = int(profile[G_PRO_2_PROFILE_DPI_DEFAULT_INDEX_OFFSET])
-    indices = []
-    if 0 <= default_idx < G_PRO_2_PROFILE_DPI_SLOTS:
-        indices.append(default_idx)
-    indices.extend(
-        idx for idx in range(G_PRO_2_PROFILE_DPI_SLOTS) if idx not in indices
-    )
-    for idx in indices:
+    slots = []
+    for idx in range(G_PRO_2_PROFILE_DPI_SLOTS):
         offset = (
             G_PRO_2_PROFILE_DPI_RESOLUTIONS_OFFSET
             + idx * G_PRO_2_PROFILE_DPI_SLOT_SIZE
@@ -698,33 +708,69 @@ def _read_g_pro_2_profile_dpi(profile):
         y_dpi = int.from_bytes(profile[offset + 2:offset + 4], "little")
         dpi = x_dpi if x_dpi == y_dpi else (x_dpi or y_dpi)
         if dpi and dpi != 0xFFFF:
-            return dpi
-    return None
+            slots.append(dpi)
+        else:
+            slots.append(None)
+    return slots
 
 
-def _patch_g_pro_2_profile_dpi(body, dpi):
+def _normalize_g_pro_2_dpi_slots(dpi_values, current_dpi=None):
+    slots = []
+    for value in dpi_values or ():
+        try:
+            dpi = int(value)
+        except (TypeError, ValueError):
+            continue
+        if dpi <= 0:
+            continue
+        slots.append(min(dpi, 0xFFFF))
+        if len(slots) >= G_PRO_2_PROFILE_DPI_SLOTS:
+            break
+    if not slots:
+        try:
+            dpi = int(current_dpi)
+        except (TypeError, ValueError):
+            dpi = 1000
+        slots.append(max(1, min(dpi, 0xFFFF)))
+    while len(slots) < G_PRO_2_PROFILE_DPI_SLOTS:
+        slots.append(slots[-1])
+    return slots[:G_PRO_2_PROFILE_DPI_SLOTS]
+
+
+def _patch_g_pro_2_profile_dpi(body, dpi=None, dpi_slots=None, active_index=0):
     min_size = (
         G_PRO_2_PROFILE_DPI_RESOLUTIONS_OFFSET
         + G_PRO_2_PROFILE_DPI_SLOTS * G_PRO_2_PROFILE_DPI_SLOT_SIZE
     )
     if len(body) < min_size:
         return False
-    dpi = int(dpi)
-    if dpi <= 0 or dpi > 0xFFFF:
-        return False
+    if dpi_slots is None:
+        try:
+            dpi = int(dpi)
+        except (TypeError, ValueError):
+            return False
+        if dpi <= 0 or dpi > 0xFFFF:
+            return False
+    slots = _normalize_g_pro_2_dpi_slots(dpi_slots, current_dpi=dpi)
+    try:
+        active_index = int(active_index)
+    except (TypeError, ValueError):
+        active_index = 0
+    if not 0 <= active_index < G_PRO_2_PROFILE_DPI_SLOTS:
+        active_index = 0
 
-    body[G_PRO_2_PROFILE_DPI_DEFAULT_INDEX_OFFSET] = 0x00
-    body[G_PRO_2_PROFILE_DPI_SHIFT_INDEX_OFFSET] = 0x00
+    body[G_PRO_2_PROFILE_DPI_DEFAULT_INDEX_OFFSET] = active_index & 0xFF
+    body[G_PRO_2_PROFILE_DPI_SHIFT_INDEX_OFFSET] = active_index & 0xFF
     if body[G_PRO_2_PROFILE_DPI_HEADER_OFFSET] == 0xFF:
         body[G_PRO_2_PROFILE_DPI_HEADER_OFFSET] = 0x00
     # G PRO 2 profile format 7 stores each DPI slot as:
     # X little-endian, Y little-endian, then LOD.
-    dpi_bytes = dpi.to_bytes(2, "little")
     for idx in range(G_PRO_2_PROFILE_DPI_SLOTS):
         offset = (
             G_PRO_2_PROFILE_DPI_RESOLUTIONS_OFFSET
             + idx * G_PRO_2_PROFILE_DPI_SLOT_SIZE
         )
+        dpi_bytes = int(slots[idx]).to_bytes(2, "little")
         lod = body[offset + 4]
         if lod not in (0x01, 0x02):
             lod = G_PRO_2_PROFILE_DPI_LOD_DEFAULT
@@ -734,11 +780,15 @@ def _patch_g_pro_2_profile_dpi(body, dpi):
     return True
 
 
-def _build_g_pro_2_mouser_profile(base_profile, size, dpi=None):
+def _build_g_pro_2_mouser_profile(
+    base_profile, size, dpi=None, dpi_slots=None, active_index=0
+):
     if not base_profile or len(base_profile) < size:
         return None
     body = bytearray(base_profile[:max(0, size - 2)])
-    if dpi is not None and not _patch_g_pro_2_profile_dpi(body, dpi):
+    if (dpi is not None or dpi_slots is not None) and not _patch_g_pro_2_profile_dpi(
+        body, dpi=dpi, dpi_slots=dpi_slots, active_index=active_index
+    ):
         return None
     for offset, subtype, value, _name in G_PRO_2_MOUSER_BUTTON_MAPPINGS:
         if offset + 4 > len(body):
@@ -786,11 +836,14 @@ class HidGestureListener:
         self._rawxy_enabled = False
         self._pending_dpi = None        # set by set_dpi(), applied in loop
         self._dpi_result  = None        # True/False after apply
+        self._dpi_call_lock = threading.Lock()
         self._smart_shift_idx = None      # feature index of SMART_SHIFT / SMART_SHIFT_ENHANCED
         self._smart_shift_enhanced = False  # True → use fn 1/2; False → fn 0/1
         self._onboard_profiles_idx = None
         self._onboard_profiles_restore_mode = None
         self._mouse_button_spy_idx = None   # feature index of MOUSE_BUTTON_SPY
+        self._g_pro_2_cached_dpi_slots = None
+        self._g_pro_2_cached_dpi_index = None
         self._pending_smart_shift = None
         self._smart_shift_result = None
         self._smart_shift_call_lock = threading.Lock()
@@ -1720,7 +1773,9 @@ class HidGestureListener:
         print(f"[HidGesture] ONBOARD_PROFILES current DPI index {index} failed")
         return False
 
-    def _write_g_pro_2_mouser_profile(self, device_spec=None, dpi=None):
+    def _write_g_pro_2_mouser_profile(
+        self, device_spec=None, dpi=None, dpi_slots=None, active_index=0
+    ):
         if getattr(device_spec, "key", "") != "g_pro_2_lightspeed":
             return False
         if self._dev is None:
@@ -1746,7 +1801,7 @@ class HidGestureListener:
         current_profile = self._read_onboard_sector(
             G_PRO_2_MOUSER_PROFILE_SECTOR, size
         )
-        if dpi is None:
+        if dpi is None and dpi_slots is None:
             dpi = _read_g_pro_2_profile_dpi(current_profile)
 
         base_profile = self._read_onboard_sector(G_PRO_2_ROM_PROFILE_SECTOR, size)
@@ -1754,7 +1809,13 @@ class HidGestureListener:
             print("[HidGesture] G PRO 2 read-only profile read failed")
             return False
 
-        profile_payload = _build_g_pro_2_mouser_profile(base_profile, size, dpi=dpi)
+        profile_payload = _build_g_pro_2_mouser_profile(
+            base_profile,
+            size,
+            dpi=dpi,
+            dpi_slots=dpi_slots,
+            active_index=active_index,
+        )
         if profile_payload is None:
             print("[HidGesture] G PRO 2 Mouser profile build failed")
             return False
@@ -1776,7 +1837,17 @@ class HidGestureListener:
         if not self._set_active_onboard_profile(G_PRO_2_MOUSER_PROFILE_SECTOR):
             return False
 
-        dpi_note = f" profile_dpi={int(dpi)}" if dpi is not None else ""
+        self._g_pro_2_cached_dpi_slots = _read_g_pro_2_profile_dpi_slots(
+            profile_payload
+        )
+        self._g_pro_2_cached_dpi_index = active_index
+        if dpi_slots is not None:
+            dpi_note = (
+                f" profile_dpi_slots={self._g_pro_2_cached_dpi_slots} "
+                f"active_index={int(active_index)}"
+            )
+        else:
+            dpi_note = f" profile_dpi={int(dpi)}" if dpi is not None else ""
         print(
             "[HidGesture] G PRO 2 Mouser onboard profile active "
             "(dpi=consumer:0x00FD right_back=consumer:0x03F1 "
@@ -1807,6 +1878,41 @@ class HidGestureListener:
         print(
             f"[HidGesture] DPI set to {int(dpi)} via G PRO 2 onboard profile "
             "X/Y slots"
+        )
+        return True
+
+    def _set_g_pro_2_onboard_dpi_preset_index(self, dpi, presets, index):
+        device_spec = self._connected_device_info
+        if getattr(device_spec, "key", "") != "g_pro_2_lightspeed":
+            return False
+        target_dpi = clamp_dpi(dpi, device_spec)
+        clamped_presets = [clamp_dpi(value, device_spec) for value in presets or ()]
+        slots = _normalize_g_pro_2_dpi_slots(
+            clamped_presets, current_dpi=target_dpi
+        )
+        try:
+            index = int(index)
+        except (TypeError, ValueError):
+            index = 0
+        if not 0 <= index < len(slots):
+            try:
+                index = slots.index(target_dpi)
+            except ValueError:
+                index = 0
+        if slots[index] != target_dpi:
+            slots[index] = target_dpi
+
+        if self._g_pro_2_cached_dpi_slots != slots:
+            if not self._write_g_pro_2_mouser_profile(
+                device_spec, dpi_slots=slots, active_index=index
+            ):
+                return False
+        if not self._set_onboard_current_dpi_index(index):
+            return False
+        self._g_pro_2_cached_dpi_index = index
+        print(
+            f"[HidGesture] DPI set to {int(target_dpi)} via G PRO 2 onboard "
+            f"profile slot {index}"
         )
         return True
 
@@ -1885,22 +1991,63 @@ class HidGestureListener:
     def set_dpi(self, dpi_value):
         """Queue a DPI change — will be applied on the listener thread.
         Can be called from any thread.  Returns True on success."""
-        dpi = clamp_dpi(dpi_value, self._connected_device_info)
-        self._dpi_result = None
-        self._pending_dpi = dpi
-        # Wait up to 3s for the listener thread to apply it
-        for _ in range(30):
-            if self._pending_dpi is None:
-                return self._dpi_result is True
-            time.sleep(0.1)
-        print("[HidGesture] DPI set timed out")
-        return False
+        with self._dpi_call_lock:
+            dpi = clamp_dpi(dpi_value, self._connected_device_info)
+            self._dpi_result = None
+            self._pending_dpi = dpi
+            # Wait up to 3s for the listener thread to apply it
+            for _ in range(30):
+                if self._pending_dpi is None:
+                    return self._dpi_result is True
+                time.sleep(0.1)
+            print("[HidGesture] DPI set timed out")
+            return False
+
+    def set_dpi_preset_index(self, dpi_value, presets, index):
+        """Queue a G PRO 2 DPI slot switch, falling back to a normal DPI set."""
+        with self._dpi_call_lock:
+            dpi = clamp_dpi(dpi_value, self._connected_device_info)
+            try:
+                index = int(index)
+            except (TypeError, ValueError):
+                index = 0
+            self._dpi_result = None
+            self._pending_dpi = {
+                "kind": "preset_index",
+                "dpi": dpi,
+                "presets": tuple(presets or ()),
+                "index": index,
+            }
+            for _ in range(30):
+                if self._pending_dpi is None:
+                    return self._dpi_result is True
+                time.sleep(0.1)
+            print("[HidGesture] DPI preset index set timed out")
+            return False
 
     def _apply_pending_dpi(self):
         """Called from the listener thread to actually send DPI."""
-        dpi = self._pending_dpi
-        if dpi is None:
+        pending = self._pending_dpi
+        if pending is None:
             return
+        preset_cmd = pending if isinstance(pending, dict) else None
+        if preset_cmd and preset_cmd.get("kind") == "preset_index":
+            dpi = preset_cmd.get("dpi")
+            if self._set_g_pro_2_onboard_dpi_preset_index(
+                dpi,
+                preset_cmd.get("presets") or (),
+                preset_cmd.get("index", 0),
+            ):
+                self._dpi_result = True
+                self._pending_dpi = None
+                return
+            if getattr(self._connected_device_info, "key", "") == "g_pro_2_lightspeed":
+                print("[HidGesture] G PRO 2 DPI preset slot switch FAILED")
+                self._dpi_result = False
+                self._pending_dpi = None
+                return
+        else:
+            dpi = pending
         if self._dpi_idx is None or self._dev is None:
             print("[HidGesture] Cannot set DPI — not connected")
             self._dpi_result = False
@@ -1934,15 +2081,16 @@ class HidGestureListener:
     def read_dpi(self):
         """Queue a DPI read — will be applied on the listener thread.
         Can be called from any thread.  Returns the DPI value or None."""
-        self._dpi_result = None
-        self._pending_dpi = "read"  # special sentinel
-        for _ in range(30):
-            if self._pending_dpi is None:
-                return self._dpi_result
-            time.sleep(0.1)
-        print("[HidGesture] DPI read timed out")
-        self._pending_dpi = None
-        return None
+        with self._dpi_call_lock:
+            self._dpi_result = None
+            self._pending_dpi = "read"  # special sentinel
+            for _ in range(30):
+                if self._pending_dpi is None:
+                    return self._dpi_result
+                time.sleep(0.1)
+            print("[HidGesture] DPI read timed out")
+            self._pending_dpi = None
+            return None
 
     def _apply_pending_read_dpi(self):
         """Called from the listener thread to read current DPI."""
@@ -2792,6 +2940,8 @@ class HidGestureListener:
             self._mouse_button_spy_idx = None
             self._onboard_profiles_idx = None
             self._onboard_profiles_restore_mode = None
+            self._g_pro_2_cached_dpi_slots = None
+            self._g_pro_2_cached_dpi_index = None
             self._pending_battery = None
             self._pending_dpi = None
             self._dpi_result = None
