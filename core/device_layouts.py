@@ -341,10 +341,10 @@ G502_LIGHTSPEED_LAYOUT = {
         },
         {
             "buttonKey": "g502_g7",
-            "label": "G7 Top button",
+            "label": "G7 Rear top button",
             "summaryType": "mapping",
-            "normX": 0.468,
-            "normY": 0.621,
+            "normX": 0.510,
+            "normY": 0.570,
             "labelSide": "left",
             "labelOffX": -290,
             "labelOffY": 28,

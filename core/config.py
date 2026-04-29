@@ -34,7 +34,7 @@ BUTTON_NAMES = {
     "g502_g4":       "G4 Rear thumb button",
     "g502_g5":       "G5 Front thumb button",
     "g502_g6":       "G6 DPI shift / sniper button",
-    "g502_g7":       "G7 Top button",
+    "g502_g7":       "G7 Rear top button",
     "g502_g8":       "G8 Front top button",
     "g502_g9":       "G9 Rear top button",
     "hscroll_left":  "Horizontal scroll left",
