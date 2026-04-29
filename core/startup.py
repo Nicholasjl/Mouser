@@ -2,6 +2,7 @@
 
 import os
 import plistlib
+import posixpath
 import subprocess
 import sys
 
@@ -76,7 +77,7 @@ def _apply_windows(enabled: bool) -> None:
 
 def _macos_plist_path() -> str:
     return os.path.expanduser(
-        os.path.join("~/Library/LaunchAgents", MACOS_PLIST_NAME)
+        posixpath.join("~/Library/LaunchAgents", MACOS_PLIST_NAME)
     )
 
 

@@ -422,6 +422,46 @@ class WindowsRawInputExtraButtonTests(unittest.TestCase):
         event = hook._dispatch_queue.get_nowait()
         self.assertEqual(event.event_type, mouse_hook.MouseEvent.XBUTTON3_DOWN)
 
+    def test_g502_raw_programmable_bits_dispatch_g_buttons(self):
+        hook = mouse_hook.MouseHook()
+        hook._connected_device = SimpleNamespace(
+            key="g502_lightspeed",
+            supported_buttons=(
+                "g502_g4", "g502_g5", "g502_g6",
+                "g502_g7", "g502_g8", "g502_g9",
+            ),
+        )
+        hdevice = object()
+
+        hook._process_raw_mouse_button_state(hdevice, 0x20)
+        hook._process_raw_mouse_button_state(hdevice, 0x60)
+        hook._process_raw_mouse_button_state(hdevice, 0x40)
+        hook._process_raw_mouse_button_state(hdevice, 0x00)
+        hook._process_raw_mouse_button_state(hdevice, 0x80)
+        hook._process_raw_mouse_button_state(hdevice, 0x180)
+        hook._process_raw_mouse_button_state(hdevice, 0x100)
+        hook._process_raw_mouse_button_state(hdevice, 0x00)
+
+        events = []
+        while not hook._dispatch_queue.empty():
+            events.append(hook._dispatch_queue.get_nowait())
+
+        self.assertEqual(
+            [event.event_type for event in events],
+            [
+                mouse_hook.MouseEvent.G502_G6_DOWN,
+                mouse_hook.MouseEvent.G502_G7_DOWN,
+                mouse_hook.MouseEvent.G502_G6_UP,
+                mouse_hook.MouseEvent.G502_G7_UP,
+                mouse_hook.MouseEvent.G502_G8_DOWN,
+                mouse_hook.MouseEvent.G502_G9_DOWN,
+                mouse_hook.MouseEvent.G502_G8_UP,
+                mouse_hook.MouseEvent.G502_G9_UP,
+            ],
+        )
+        self.assertEqual(events[0].raw_data["button"], "g502_g6")
+        self.assertEqual(events[-1].raw_data["mask"], 0x100)
+
     def test_raw_button_flags_dispatch_xbutton1_and_xbutton2(self):
         hook = mouse_hook.MouseHook()
         hook._connected_device = SimpleNamespace(
@@ -452,6 +492,37 @@ class WindowsRawInputExtraButtonTests(unittest.TestCase):
             ],
         )
         self.assertEqual(events[0].raw_data["source"], "raw_input_flags")
+
+    def test_g502_raw_button_flags_dispatch_g4_and_g5(self):
+        hook = mouse_hook.MouseHook()
+        hook._connected_device = SimpleNamespace(
+            key="g502_lightspeed",
+            supported_buttons=("g502_g4", "g502_g5"),
+        )
+
+        hook._queue_raw_button_flag_events(
+            mouse_hook.RI_MOUSE_BUTTON_4_DOWN
+            | mouse_hook.RI_MOUSE_BUTTON_5_DOWN
+        )
+        hook._queue_raw_button_flag_events(
+            mouse_hook.RI_MOUSE_BUTTON_4_UP
+            | mouse_hook.RI_MOUSE_BUTTON_5_UP
+        )
+
+        events = []
+        while not hook._dispatch_queue.empty():
+            events.append(hook._dispatch_queue.get_nowait())
+
+        self.assertEqual(
+            [event.event_type for event in events],
+            [
+                mouse_hook.MouseEvent.G502_G4_DOWN,
+                mouse_hook.MouseEvent.G502_G5_DOWN,
+                mouse_hook.MouseEvent.G502_G4_UP,
+                mouse_hook.MouseEvent.G502_G5_UP,
+            ],
+        )
+        self.assertEqual(events[0].raw_data["button"], "g502_g4")
 
     def test_raw_extra_bits_keep_legacy_gesture_fallback_without_side_buttons(self):
         hook = mouse_hook.MouseHook()
@@ -530,6 +601,101 @@ class WindowsRawInputExtraButtonTests(unittest.TestCase):
         self.assertEqual(events[0].raw_data["source"], "hidpp_button_spy")
         self.assertEqual(events[2].raw_data["mask"], 0x0080)
 
+    def test_g502_hidpp_button_spy_dispatches_g_buttons(self):
+        hook = mouse_hook.MouseHook()
+        hook._connected_device = SimpleNamespace(
+            key="g502_lightspeed",
+            supported_buttons=(
+                "g502_g4", "g502_g5", "g502_g6",
+                "g502_g7", "g502_g8", "g502_g9",
+            ),
+        )
+        hook._hid_gesture = SimpleNamespace(mouse_button_spy_index=0x0A)
+        hdevice = object()
+
+        hook._process_raw_hid_report(
+            hdevice,
+            bytes([0x11, 0x01, 0x0A, 0x00, 0x00, 0x20] + [0x00] * 14),
+        )
+        hook._process_raw_hid_report(
+            hdevice,
+            bytes([0x11, 0x01, 0x0A, 0x00, 0x01, 0x20] + [0x00] * 14),
+        )
+        hook._process_raw_hid_report(
+            hdevice,
+            bytes([0x11, 0x01, 0x0A, 0x00, 0x01, 0x00] + [0x00] * 14),
+        )
+        hook._process_raw_hid_report(
+            hdevice,
+            bytes([0x11, 0x01, 0x0A, 0x00, 0x00, 0x00] + [0x00] * 14),
+        )
+
+        events = []
+        while not hook._dispatch_queue.empty():
+            events.append(hook._dispatch_queue.get_nowait())
+
+        self.assertEqual(
+            [event.event_type for event in events],
+            [
+                mouse_hook.MouseEvent.G502_G6_DOWN,
+                mouse_hook.MouseEvent.G502_G9_DOWN,
+                mouse_hook.MouseEvent.G502_G6_UP,
+                mouse_hook.MouseEvent.G502_G9_UP,
+            ],
+        )
+        self.assertEqual(events[0].raw_data["button"], "g502_g6")
+        self.assertEqual(events[1].raw_data["mask"], 0x0100)
+
+    def test_g502_onboard_profile_dpi_notifications_dispatch_g7_g8_clicks(self):
+        hook = mouse_hook.MouseHook()
+        hook._connected_device = SimpleNamespace(
+            key="g502_lightspeed",
+            supported_buttons=("g502_g7", "g502_g8"),
+        )
+        hook._hid_gesture = SimpleNamespace(onboard_profiles_index=0x09)
+        hdevice = object()
+
+        self.assertTrue(hook._process_raw_hid_report(
+            hdevice,
+            bytes([0x11, 0x01, 0x09, 0x10, 0x01] + [0x00] * 15),
+        ))
+        self.assertTrue(hook._process_raw_hid_report(
+            hdevice,
+            bytes([0x11, 0x01, 0x09, 0x10, 0x00] + [0x00] * 15),
+        ))
+
+        events = []
+        while not hook._dispatch_queue.empty():
+            events.append(hook._dispatch_queue.get_nowait())
+
+        self.assertEqual(
+            [event.event_type for event in events],
+            [
+                mouse_hook.MouseEvent.G502_G8_DOWN,
+                mouse_hook.MouseEvent.G502_G8_UP,
+                mouse_hook.MouseEvent.G502_G7_DOWN,
+                mouse_hook.MouseEvent.G502_G7_UP,
+            ],
+        )
+        self.assertEqual(events[0].raw_data["source"], "g502_onboard_profile")
+        self.assertEqual(events[0].raw_data["dpi_index"], 1)
+
+    def test_g502_onboard_profile_ignores_request_responses(self):
+        hook = mouse_hook.MouseHook()
+        hook._connected_device = SimpleNamespace(
+            key="g502_lightspeed",
+            supported_buttons=("g502_g7", "g502_g8"),
+        )
+        hook._hid_gesture = SimpleNamespace(onboard_profiles_index=0x09)
+
+        handled = hook._process_raw_hid_report(
+            object(),
+            bytes([0x11, 0x01, 0x09, 0x1A, 0x01] + [0x00] * 15),
+        )
+
+        self.assertFalse(handled)
+        self.assertTrue(hook._dispatch_queue.empty())
+
     def test_hidpp_button_spy_listener_callback_dispatches_dpi_alias(self):
         hook = mouse_hook.MouseHook()
         hook._connected_device = SimpleNamespace(key="g_pro_2_lightspeed")
@@ -584,6 +750,62 @@ class WindowsRawInputExtraButtonTests(unittest.TestCase):
             ],
         )
         self.assertEqual(events[0].raw_data["source"], "consumer_control")
+
+    def test_g502_consumer_control_report_dispatches_sniper_button(self):
+        hook = mouse_hook.MouseHook()
+        hook._connected_device = SimpleNamespace(
+            key="g502_lightspeed",
+            supported_buttons=(
+                "g502_g4", "g502_g5", "g502_g6",
+                "g502_g7", "g502_g8", "g502_g9",
+            ),
+        )
+        hdevice = object()
+
+        hook._process_raw_hid_report(hdevice, bytes([0x03, 0x03, 0xF3, 0x03, 0xF5]))
+        hook._process_raw_hid_report(hdevice, bytes([0x03, 0x03, 0xF8, 0x00, 0x00]))
+        hook._process_raw_hid_report(hdevice, bytes([0x03, 0x00, 0x00, 0x00, 0x00]))
+
+        events = []
+        while not hook._dispatch_queue.empty():
+            events.append(hook._dispatch_queue.get_nowait())
+
+        self.assertEqual(
+            [event.event_type for event in events],
+            [
+                mouse_hook.MouseEvent.G502_G4_DOWN,
+                mouse_hook.MouseEvent.G502_G6_DOWN,
+                mouse_hook.MouseEvent.G502_G4_UP,
+                mouse_hook.MouseEvent.G502_G6_UP,
+                mouse_hook.MouseEvent.G502_G9_DOWN,
+                mouse_hook.MouseEvent.G502_G9_UP,
+            ],
+        )
+        self.assertEqual(events[0].raw_data["button"], "g502_g4")
+
+    def test_g502_factory_consumer_usage_still_dispatches_sniper_button(self):
+        hook = mouse_hook.MouseHook()
+        hook._connected_device = SimpleNamespace(
+            key="g502_lightspeed",
+            supported_buttons=("g502_g6",),
+        )
+        hdevice = object()
+
+        hook._process_raw_hid_report(hdevice, bytes([0x03, 0xFD, 0x00, 0x00, 0x00]))
+        hook._process_raw_hid_report(hdevice, bytes([0x03, 0x00, 0x00, 0x00, 0x00]))
+
+        events = []
+        while not hook._dispatch_queue.empty():
+            events.append(hook._dispatch_queue.get_nowait())
+
+        self.assertEqual(
+            [event.event_type for event in events],
+            [
+                mouse_hook.MouseEvent.G502_G6_DOWN,
+                mouse_hook.MouseEvent.G502_G6_UP,
+            ],
+        )
+        self.assertEqual(events[0].raw_data["button"], "g502_g6")
 
     def test_consumer_control_report_dispatches_g_pro_2_right_side_buttons(self):
         hook = mouse_hook.MouseHook()

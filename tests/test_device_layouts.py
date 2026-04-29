@@ -27,6 +27,7 @@ class DeviceLayoutTests(unittest.TestCase):
         self.assertIn({"key": "mx_anywhere", "label": "MX Anywhere family"}, choices)
         self.assertIn({"key": "mx_vertical", "label": "MX Vertical family"}, choices)
         self.assertIn({"key": "g_pro_2_lightspeed", "label": "G PRO 2 LIGHTSPEED"}, choices)
+        self.assertIn({"key": "g502_lightspeed", "label": "G502 LIGHTSPEED"}, choices)
 
     def test_mx_anywhere_layout_is_interactive(self):
         layout = get_device_layout("mx_anywhere")
@@ -53,6 +54,30 @@ class DeviceLayoutTests(unittest.TestCase):
         self.assertEqual(
             {hotspot["buttonKey"] for hotspot in layout["hotspots"]},
             {"middle", "xbutton1", "xbutton2", "xbutton3", "xbutton4", "dpi_switch"},
+        )
+        asset = Path(__file__).resolve().parents[1] / "images" / layout["image_asset"]
+        self.assertTrue(asset.exists())
+
+    def test_g502_lightspeed_layout_is_interactive(self):
+        layout = get_device_layout("g502_lightspeed")
+
+        self.assertEqual(layout["key"], "g502_lightspeed")
+        self.assertTrue(layout["interactive"])
+        self.assertEqual(layout["image_asset"], "g502_lightspeed.png")
+        self.assertEqual(layout["image_width"], 620)
+        self.assertEqual(layout["image_height"], 414)
+        self.assertEqual(
+            {hotspot["buttonKey"] for hotspot in layout["hotspots"]},
+            {
+                "middle",
+                "g502_g4",
+                "g502_g5",
+                "g502_g6",
+                "g502_g7",
+                "g502_g8",
+                "g502_g9",
+                "hscroll_left",
+            },
         )
         asset = Path(__file__).resolve().parents[1] / "images" / layout["image_asset"]
         self.assertTrue(asset.exists())

@@ -983,8 +983,8 @@ Item {
                             id: mouseImg
                             source: backend.deviceImageSource
                             fillMode: Image.PreserveAspectFit
-                            width: backend.deviceImageWidth
-                            height: backend.deviceImageHeight
+                            width: Math.max(260, Math.min(backend.deviceImageWidth, mouseImageArea.width - 32))
+                            height: Math.max(180, Math.min(backend.deviceImageHeight, mouseImageArea.height - 12))
                             anchors.centerIn: parent
                             visible: backend.mouseConnected
                             smooth: true
@@ -1113,6 +1113,7 @@ Item {
                                 labelSide: String(hotspot["labelSide"] || "right")
                                 labelOffX: hotspot["labelOffX"] === undefined ? 120 : Number(hotspot["labelOffX"])
                                 labelOffY: hotspot["labelOffY"] === undefined ? -30 : Number(hotspot["labelOffY"])
+                                visible: backend.mouseConnected && backend.hasInteractiveDeviceLayout
                             }
                         }
 

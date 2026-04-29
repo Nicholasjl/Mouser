@@ -499,6 +499,8 @@ DEFAULT_GESTURE_CID = DEFAULT_GESTURE_CIDS[0]
 G_PRO_2_MOUSER_PROFILE_SECTOR = 0x0002
 G_PRO_2_ROM_PROFILE_SECTOR = 0x0101
 G_PRO_2_ROM_CONTROL_SECTOR = 0x0100
+G502_MOUSER_PROFILE_SECTOR = 0x0005
+G502_ROM_PROFILE_SECTOR = 0x0101
 ONBOARD_PROFILE_MODE_ENABLED = 0x01
 ONBOARD_PROFILE_MODE_SOFTWARE = 0x02
 G_PRO_2_PROFILE_REPORT_RATE_OFFSET = 0x00
@@ -518,6 +520,24 @@ G_PRO_2_MOUSER_BUTTON_MAPPINGS = (
     (0x44, 0x03, G_PRO_2_MOUSER_CONSUMER_USAGES["dpi_switch"], "dpi_switch"),
     (0x48, 0x03, G_PRO_2_MOUSER_CONSUMER_USAGES["right_back"], "right_back"),
     (0x4C, 0x03, G_PRO_2_MOUSER_CONSUMER_USAGES["right_front"], "right_front"),
+)
+G502_PROFILE_NORMAL_BUTTON_OFFSET = 0x20
+G502_PROFILE_GSHIFT_BUTTON_OFFSET = 0x60
+G502_MOUSER_CONSUMER_USAGES = {
+    "g502_g4": 0x03F3,
+    "g502_g5": 0x03F4,
+    "g502_g6": 0x03F5,
+    "g502_g7": 0x03F6,
+    "g502_g8": 0x03F7,
+    "g502_g9": 0x03F8,
+}
+G502_MOUSER_BUTTON_MAPPINGS = (
+    (0x2C, 0x03, G502_MOUSER_CONSUMER_USAGES["g502_g4"], "g502_g4"),
+    (0x30, 0x03, G502_MOUSER_CONSUMER_USAGES["g502_g5"], "g502_g5"),
+    (0x34, 0x03, G502_MOUSER_CONSUMER_USAGES["g502_g6"], "g502_g6"),
+    (0x38, 0x03, G502_MOUSER_CONSUMER_USAGES["g502_g7"], "g502_g7"),
+    (0x3C, 0x03, G502_MOUSER_CONSUMER_USAGES["g502_g8"], "g502_g8"),
+    (0x40, 0x03, G502_MOUSER_CONSUMER_USAGES["g502_g9"], "g502_g9"),
 )
 
 STANDARD_REPORT_RATE_MS_TO_HZ = {
@@ -900,6 +920,37 @@ def _build_g_pro_2_mouser_profile(
 
 # ── Listener class ────────────────────────────────────────────────
 
+def _patch_g502_profile_buttons(body):
+    gshift_delta = (
+        G502_PROFILE_GSHIFT_BUTTON_OFFSET
+        - G502_PROFILE_NORMAL_BUTTON_OFFSET
+    )
+    for offset, subtype, value, _name in G502_MOUSER_BUTTON_MAPPINGS:
+        if offset + 4 > len(body):
+            return False
+        payload = [
+            0x80,
+            subtype & 0xFF,
+            (value >> 8) & 0xFF,
+            value & 0xFF,
+        ]
+        body[offset:offset + 4] = payload
+
+        gshift_offset = offset + gshift_delta
+        if gshift_offset + 4 <= len(body):
+            body[gshift_offset:gshift_offset + 4] = payload
+    return True
+
+
+def _build_g502_mouser_profile(base_profile, size):
+    if not base_profile or len(base_profile) < size:
+        return None
+    body = bytearray(base_profile[:max(0, size - 2)])
+    if not _patch_g502_profile_buttons(body):
+        return None
+    return _append_profile_crc(body, size)
+
+
 class HidGestureListener:
     """Background thread: diverts the gesture button and listens via HID++."""
 
@@ -1000,6 +1051,10 @@ class HidGestureListener:
     @property
     def mouse_button_spy_index(self):
         return self._mouse_button_spy_idx
+
+    @property
+    def onboard_profiles_index(self):
+        return self._onboard_profiles_idx
 
     @property
     def report_rate_supported(self):
@@ -1876,6 +1931,17 @@ class HidGestureListener:
         print(f"[HidGesture] ONBOARD_PROFILES active sector 0x{sector:04X} failed")
         return False
 
+    def _read_active_onboard_profile_sector(self):
+        if self._onboard_profiles_idx is None:
+            return None
+        resp = self._request(self._onboard_profiles_idx, 4, [], timeout_ms=800)
+        if not resp:
+            return None
+        params = resp[4]
+        if len(params) < 2:
+            return None
+        return ((params[0] & 0xFF) << 8) | (params[1] & 0xFF)
+
     def _set_onboard_current_dpi_index(self, index):
         if self._onboard_profiles_idx is None:
             return False
@@ -1957,6 +2023,75 @@ class HidGestureListener:
         if self._report_rate_extended:
             return _extended_report_rate_code_to_hz(code)
         return _standard_report_rate_code_to_hz(code)
+
+    def _write_g502_mouser_profile(self, device_spec=None):
+        if getattr(device_spec, "key", "") != "g502_lightspeed":
+            return False
+        if self._dev is None:
+            return False
+        if self._onboard_profiles_idx is None:
+            self._onboard_profiles_idx = self._find_feature(FEAT_ONBOARD_PROFILES)
+        if self._onboard_profiles_idx is None:
+            print("[HidGesture] ONBOARD_PROFILES not found on G502")
+            return False
+
+        info = self._read_onboard_profile_info()
+        if not info:
+            return False
+        size = int(info.get("size") or 0)
+        sectors = int(info.get("sectors") or 0)
+        if size < 0x8C or G502_MOUSER_PROFILE_SECTOR >= sectors:
+            print(
+                "[HidGesture] G502 ONBOARD_PROFILES unsupported layout "
+                f"size={size} sectors={sectors}"
+            )
+            return False
+
+        base_sector = self._read_active_onboard_profile_sector()
+        if base_sector is None or base_sector >= 0x0100:
+            base_sector = G502_ROM_PROFILE_SECTOR
+        base_profile = self._read_onboard_sector(base_sector, size)
+        if base_profile is None:
+            print(
+                "[HidGesture] G502 active profile read failed; "
+                "falling back to read-only profile"
+            )
+            base_profile = self._read_onboard_sector(G502_ROM_PROFILE_SECTOR, size)
+        if base_profile is None:
+            print("[HidGesture] G502 read-only profile read failed")
+            return False
+
+        profile_payload = _build_g502_mouser_profile(base_profile, size)
+        if profile_payload is None:
+            print("[HidGesture] G502 Mouser profile build failed")
+            return False
+
+        headers = self._read_onboard_headers(size)
+        control_payload = _build_onboard_control_sector(
+            size,
+            G502_MOUSER_PROFILE_SECTOR,
+            headers=headers,
+            max_profiles=max(1, min(15, int(info.get("count") or 5))),
+        )
+
+        if not self._write_onboard_sector(G502_MOUSER_PROFILE_SECTOR, profile_payload):
+            return False
+        if not self._write_onboard_sector(0x0000, control_payload):
+            return False
+        if not self._set_onboard_profile_mode(ONBOARD_PROFILE_MODE_ENABLED):
+            return False
+        if not self._set_active_onboard_profile(G502_MOUSER_PROFILE_SECTOR):
+            return False
+
+        print(
+            "[HidGesture] G502 Mouser onboard profile active "
+            "(G4-G9=independent consumer usages)"
+        )
+        return True
+
+    def _ensure_g502_mouser_profile(self, device_spec=None):
+        """Install a G502 profile that exposes G4-G9 as distinct buttons."""
+        return self._write_g502_mouser_profile(device_spec)
 
     def _write_g_pro_2_mouser_profile(
         self, device_spec=None, dpi=None, dpi_slots=None, active_index=0,
@@ -3043,6 +3178,14 @@ class HidGestureListener:
 
                 self._discover_report_rate_feature()
 
+                onboard_fi = self._find_feature(FEAT_ONBOARD_PROFILES)
+                if onboard_fi:
+                    self._onboard_profiles_idx = onboard_fi
+                    print(
+                        "[HidGesture] Found ONBOARD_PROFILES "
+                        f"@0x{onboard_fi:02X} on Lightspeed device"
+                    )
+
                 # Discover battery
                 batt_fi = self._find_feature(FEAT_UNIFIED_BATT)
                 if batt_fi:
@@ -3060,7 +3203,10 @@ class HidGestureListener:
                 if spy_fi:
                     self._mouse_button_spy_idx = spy_fi
                     print(f"[HidGesture] Found MOUSE_BUTTON_SPY @0x{spy_fi:02X} on Lightspeed device")
-                self._ensure_g_pro_2_mouser_profile(device_spec)
+                if getattr(device_spec, "key", "") == "g_pro_2_lightspeed":
+                    self._ensure_g_pro_2_mouser_profile(device_spec)
+                elif getattr(device_spec, "key", "") == "g502_lightspeed":
+                    self._ensure_g502_mouser_profile(device_spec)
 
                 # For devices without REPROG_V4 (like G PRO 2 Lightspeed),
                 # connect anyway — button remapping uses OnboardProfiles.
@@ -3069,6 +3215,7 @@ class HidGestureListener:
                     self._dpi_idx is not None,
                     self._report_rate_idx is not None,
                     self._battery_idx is not None,
+                    self._onboard_profiles_idx is not None,
                     self._mouse_button_spy_idx is not None,
                 ])
                 if has_useful_features or hidpp_name:

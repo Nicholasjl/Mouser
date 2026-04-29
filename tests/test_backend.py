@@ -1,5 +1,7 @@
 import copy
+import os
 import sys
+import tempfile
 import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -108,10 +110,13 @@ class BackendDeviceLayoutTests(unittest.TestCase):
         self.assertFalse(backend.hasInteractiveDeviceLayout)
 
     def test_device_image_source_uses_encoded_file_url(self):
-        backend = self._make_backend(root_dir="/tmp/Mouser Build")
+        root_dir = os.path.join(tempfile.gettempdir(), "Mouser Build")
+        backend = self._make_backend(root_dir=root_dir)
 
         expected = QUrl.fromLocalFile(
-            "/tmp/Mouser Build/images/icons/mouse-simple.svg"
+            os.path.abspath(
+                os.path.join(root_dir, "images", "icons", "mouse-simple.svg")
+            )
         ).toString()
 
         self.assertEqual(backend.deviceImageSource, expected)

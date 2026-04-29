@@ -67,9 +67,10 @@ No telemetry. No cloud. No Logitech account required.
 | MX Anywhere 3S / 3 / 2S | Yes | Dedicated interactive `mx_anywhere` layout |
 | MX Vertical | Yes | Dedicated interactive `mx_vertical` layout |
 | G PRO 2 LIGHTSPEED / PRO X 2 Superstrike | Yes | Dedicated interactive `g_pro_2_lightspeed` layout |
+| G502 LIGHTSPEED | Yes | Dedicated interactive `g502_lightspeed` layout |
 | Unknown Logitech HID++ mice | Best effort by PID/name | Generic fallback card |
 
-> **Note:** Dedicated overlays are available for MX Master, MX Anywhere, MX Vertical, and G PRO 2 LIGHTSPEED families. Other Logitech HID++ devices can still be detected, show their model name in the UI, and use the generic fallback card.
+> **Note:** Dedicated overlays are available for MX Master, MX Anywhere, MX Vertical, G PRO 2 LIGHTSPEED, and G502 LIGHTSPEED families. Other Logitech HID++ devices can still be detected, show their model name in the UI, and use the generic fallback card.
 
 ## Default Mappings
 
@@ -152,7 +153,7 @@ For macOS Accessibility permissions and login-item notes, see the [macOS Setup G
 
 - **Windows 10/11**, **macOS 12+ (Monterey)**, or **Linux (experimental; X11 plus KDE Wayland app detection)**
 - **Python 3.10+** (tested with 3.14)
-- **A supported Logitech HID++ mouse** paired via Bluetooth or USB receiver. Dedicated interactive layouts are available for MX Master, MX Anywhere, MX Vertical, and G PRO 2 LIGHTSPEED families.
+- **A supported Logitech HID++ mouse** paired via Bluetooth or USB receiver. Dedicated interactive layouts are available for MX Master, MX Anywhere, MX Vertical, G PRO 2 LIGHTSPEED, and G502 LIGHTSPEED families.
 - **Logitech Options+ must NOT be running** (it conflicts with HID++ access)
 - **macOS only:** Accessibility permission required (System Settings → Privacy & Security → Accessibility)
 - **Linux only:** `xdotool` enables per-app profile switching on X11; `kdotool` additionally enables KDE Wayland detection
@@ -440,7 +441,7 @@ The app has two pages accessible from a slim sidebar:
 
 ## Known Limitations
 
-- **Early multi-device support** — dedicated interactive overlays cover MX Master, MX Anywhere, MX Vertical, and G PRO 2 LIGHTSPEED; unknown Logitech mice still use the generic fallback card
+- **Early multi-device support** — dedicated interactive overlays cover MX Master, MX Anywhere, MX Vertical, G PRO 2 LIGHTSPEED, and G502 LIGHTSPEED; unknown Logitech mice still use the generic fallback card
 - **Per-device mappings are not fully separated yet** — layout overrides are stored per detected device, but profile mappings are still global rather than truly device-specific
 - **Bluetooth and Logi Bolt supported** — HID++ gesture button divert works over both Bluetooth and Logi Bolt USB receivers
 - **Conflicts with Logitech Options+** — both apps fight over HID++ access; quit Options+ before running Mouser

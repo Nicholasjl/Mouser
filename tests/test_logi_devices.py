@@ -99,6 +99,33 @@ class LogiDeviceRegistryTests(unittest.TestCase):
         self.assertEqual(clamp_dpi(50000, info), 44000)
         self.assertEqual(clamp_dpi(50, info), 100)
 
+    def test_resolve_g502_lightspeed_variants(self):
+        for product_id in (0xC08D, 0xC539):
+            with self.subTest(product_id=product_id):
+                device = resolve_device(product_id=product_id)
+                self.assertIsNotNone(device)
+                self.assertEqual(device.key, "g502_lightspeed")
+                self.assertEqual(device.dpi_max, 25600)
+                self.assertIn("g502_g6", device.supported_buttons)
+                self.assertIn("g502_g9", device.supported_buttons)
+                self.assertIn("hscroll_left", device.supported_buttons)
+
+        for name in (
+            "G502 LIGHTSPEED",
+            "Logitech G502 LIGHTSPEED",
+            "G502 LIGHTSPEED Wireless Gaming Mouse",
+        ):
+            with self.subTest(name=name):
+                device = resolve_device(product_name=name)
+                self.assertIsNotNone(device)
+                self.assertEqual(device.key, "g502_lightspeed")
+
+    def test_clamp_dpi_uses_g502_lightspeed_bounds(self):
+        info = build_connected_device_info(product_id=0xC539)
+
+        self.assertEqual(clamp_dpi(50000, info), 25600)
+        self.assertEqual(clamp_dpi(50, info), 100)
+
 
 if __name__ == "__main__":
     unittest.main()

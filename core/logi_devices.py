@@ -75,6 +75,20 @@ G_PRO_2_LIGHTSPEED_BUTTONS = (
     "dpi_switch",
 )
 
+# G502 LIGHTSPEED exposes Logitech G-numbered controls.  Keep these separate
+# from generic xbutton3/xbutton4 so the UI matches the physical labels.
+G502_LIGHTSPEED_BUTTONS = (
+    "middle",
+    "g502_g4",
+    "g502_g5",
+    "g502_g6",
+    "g502_g7",
+    "g502_g8",
+    "g502_g9",
+    "hscroll_left",
+    "hscroll_right",
+)
+
 # Safe minimum for any unrecognised Logitech mouse.
 GENERIC_BUTTONS = (
     "middle",
@@ -237,6 +251,25 @@ KNOWN_LOGI_DEVICES = (
         dpi_min=100,
         dpi_max=44000,
     ),
+    LogiDeviceSpec(
+        key="g502_lightspeed",
+        display_name="G502 LIGHTSPEED",
+        aliases=(
+            "Logitech G502 LIGHTSPEED",
+            "G502 Lightspeed",
+            "G502 LIGHTSPEED Wireless Gaming Mouse",
+            "Logitech G502 LIGHTSPEED Wireless Gaming Mouse",
+        ),
+        # Logitech specs list 0xC08D for wired USB and 0xC539 for the
+        # LIGHTSPEED wireless receiver used by this model.
+        product_ids=(0xC08D, 0xC539),
+        ui_layout="g502_lightspeed",
+        image_asset="g502_lightspeed.png",
+        supported_buttons=G502_LIGHTSPEED_BUTTONS,
+        gesture_cids=(),
+        dpi_min=100,
+        dpi_max=25600,
+    ),
 )
 
 
@@ -272,6 +305,7 @@ _LAYOUT_BUTTONS = {
     "mx_vertical": MX_VERTICAL_BUTTONS,
     "g_pro": G_PRO_BUTTONS,
     "g_pro_2_lightspeed": G_PRO_2_LIGHTSPEED_BUTTONS,
+    "g502_lightspeed": G502_LIGHTSPEED_BUTTONS,
     "generic_mouse": GENERIC_BUTTONS,
 }
 

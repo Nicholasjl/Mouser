@@ -30,6 +30,18 @@ class MouseEvent:
     XBUTTON3_UP = "xbutton3_up"
     XBUTTON4_DOWN = "xbutton4_down"
     XBUTTON4_UP = "xbutton4_up"
+    G502_G4_DOWN = "g502_g4_down"
+    G502_G4_UP = "g502_g4_up"
+    G502_G5_DOWN = "g502_g5_down"
+    G502_G5_UP = "g502_g5_up"
+    G502_G6_DOWN = "g502_g6_down"
+    G502_G6_UP = "g502_g6_up"
+    G502_G7_DOWN = "g502_g7_down"
+    G502_G7_UP = "g502_g7_up"
+    G502_G8_DOWN = "g502_g8_down"
+    G502_G8_UP = "g502_g8_up"
+    G502_G9_DOWN = "g502_g9_down"
+    G502_G9_UP = "g502_g9_up"
     MIDDLE_DOWN = "middle_down"
     MIDDLE_UP = "middle_up"
     GESTURE_DOWN = "gesture_down"      # MX Master 3S gesture button
@@ -243,7 +255,14 @@ if sys.platform == "win32":
         (0x40, MouseEvent.XBUTTON4_DOWN, MouseEvent.XBUTTON4_UP, "xbutton4"),
         (0x80, MouseEvent.DPI_SWITCH_DOWN, MouseEvent.DPI_SWITCH_UP, "dpi_switch"),
     )
-    _RAW_PROGRAMMABLE_BUTTON_MASK = 0x08 | 0x10 | 0x20 | 0x40 | 0x80
+    _G502_RAW_PROGRAMMABLE_BUTTONS = (
+        (0x08, MouseEvent.G502_G4_DOWN, MouseEvent.G502_G4_UP, "g502_g4"),
+        (0x10, MouseEvent.G502_G5_DOWN, MouseEvent.G502_G5_UP, "g502_g5"),
+        (0x20, MouseEvent.G502_G6_DOWN, MouseEvent.G502_G6_UP, "g502_g6"),
+        (0x40, MouseEvent.G502_G7_DOWN, MouseEvent.G502_G7_UP, "g502_g7"),
+        (0x80, MouseEvent.G502_G8_DOWN, MouseEvent.G502_G8_UP, "g502_g8"),
+        (0x100, MouseEvent.G502_G9_DOWN, MouseEvent.G502_G9_UP, "g502_g9"),
+    )
     _HIDPP_MOUSE_BUTTON_SPY_BUTTONS = (
         (0x0008, MouseEvent.XBUTTON1_DOWN, MouseEvent.XBUTTON1_UP, "xbutton1"),
         (0x0010, MouseEvent.XBUTTON2_DOWN, MouseEvent.XBUTTON2_UP, "xbutton2"),
@@ -252,8 +271,13 @@ if sys.platform == "win32":
         (0x0080, MouseEvent.DPI_SWITCH_DOWN, MouseEvent.DPI_SWITCH_UP, "dpi_switch"),
         (0x2000, MouseEvent.DPI_SWITCH_DOWN, MouseEvent.DPI_SWITCH_UP, "dpi_switch"),
     )
-    _HIDPP_MOUSE_BUTTON_SPY_MASK = (
-        0x0008 | 0x0010 | 0x0020 | 0x0040 | 0x0080 | 0x2000
+    _G502_HIDPP_MOUSE_BUTTON_SPY_BUTTONS = (
+        (0x0008, MouseEvent.G502_G4_DOWN, MouseEvent.G502_G4_UP, "g502_g4"),
+        (0x0010, MouseEvent.G502_G5_DOWN, MouseEvent.G502_G5_UP, "g502_g5"),
+        (0x0020, MouseEvent.G502_G6_DOWN, MouseEvent.G502_G6_UP, "g502_g6"),
+        (0x0040, MouseEvent.G502_G7_DOWN, MouseEvent.G502_G7_UP, "g502_g7"),
+        (0x0080, MouseEvent.G502_G8_DOWN, MouseEvent.G502_G8_UP, "g502_g8"),
+        (0x0100, MouseEvent.G502_G9_DOWN, MouseEvent.G502_G9_UP, "g502_g9"),
     )
     _HIDPP_MOUSE_BUTTON_SPY_STANDARD_MASK = 0x0001 | 0x0002 | 0x0004
     _CONSUMER_HID_BUTTONS = (
@@ -262,6 +286,23 @@ if sys.platform == "win32":
         (0x03F1, MouseEvent.XBUTTON3_DOWN, MouseEvent.XBUTTON3_UP, "xbutton3"),
         (0x03F2, MouseEvent.XBUTTON4_DOWN, MouseEvent.XBUTTON4_UP, "xbutton4"),
     )
+    _G502_CONSUMER_HID_BUTTONS = (
+        (0x03F3, MouseEvent.G502_G4_DOWN, MouseEvent.G502_G4_UP, "g502_g4"),
+        (0x03F4, MouseEvent.G502_G5_DOWN, MouseEvent.G502_G5_UP, "g502_g5"),
+        (0x03F5, MouseEvent.G502_G6_DOWN, MouseEvent.G502_G6_UP, "g502_g6"),
+        (0x03F6, MouseEvent.G502_G7_DOWN, MouseEvent.G502_G7_UP, "g502_g7"),
+        (0x03F7, MouseEvent.G502_G8_DOWN, MouseEvent.G502_G8_UP, "g502_g8"),
+        (0x03F8, MouseEvent.G502_G9_DOWN, MouseEvent.G502_G9_UP, "g502_g9"),
+        (0x00FD, MouseEvent.G502_G6_DOWN, MouseEvent.G502_G6_UP, "g502_g6"),
+        (0x00C4, MouseEvent.MODE_SHIFT_DOWN, MouseEvent.MODE_SHIFT_UP, "mode_shift"),
+    )
+    _G502_RAW_FLAG_BUTTONS = (
+        (RI_MOUSE_BUTTON_4_DOWN, MouseEvent.G502_G4_DOWN, "g502_g4"),
+        (RI_MOUSE_BUTTON_4_UP, MouseEvent.G502_G4_UP, "g502_g4"),
+        (RI_MOUSE_BUTTON_5_DOWN, MouseEvent.G502_G5_DOWN, "g502_g5"),
+        (RI_MOUSE_BUTTON_5_UP, MouseEvent.G502_G5_UP, "g502_g5"),
+    )
+    _G502_ONBOARD_DPI_SLOT_COUNT = 5
     _RAW_FLAG_BUTTONS = (
         (RI_MOUSE_BUTTON_4_DOWN, MouseEvent.XBUTTON1_DOWN, "xbutton1"),
         (RI_MOUSE_BUTTON_4_UP, MouseEvent.XBUTTON1_UP, "xbutton1"),
@@ -302,6 +343,7 @@ if sys.platform == "win32":
             self._prev_raw_buttons = {}
             self._prev_hidpp_button_spy = {}
             self._prev_consumer_usages = {}
+            self._prev_g502_dpi_index = {}
             self._hid_gesture = None
             self._last_rehook_time = 0
             self._device_connected = False
@@ -645,11 +687,21 @@ if sys.platform == "win32":
                 if wParam == WM_XBUTTONDOWN:
                     xbutton = hiword(mouse_data)
                     if xbutton == XBUTTON1:
-                        event = MouseEvent(MouseEvent.XBUTTON1_DOWN)
-                        should_block = MouseEvent.XBUTTON1_DOWN in self._blocked_events
+                        event_type = (
+                            MouseEvent.G502_G4_DOWN
+                            if self._is_g502_lightspeed()
+                            else MouseEvent.XBUTTON1_DOWN
+                        )
+                        event = MouseEvent(event_type)
+                        should_block = event_type in self._blocked_events
                     elif xbutton == XBUTTON2:
-                        event = MouseEvent(MouseEvent.XBUTTON2_DOWN)
-                        should_block = MouseEvent.XBUTTON2_DOWN in self._blocked_events
+                        event_type = (
+                            MouseEvent.G502_G5_DOWN
+                            if self._is_g502_lightspeed()
+                            else MouseEvent.XBUTTON2_DOWN
+                        )
+                        event = MouseEvent(event_type)
+                        should_block = event_type in self._blocked_events
                     elif xbutton == 3:
                         event = MouseEvent(MouseEvent.XBUTTON3_DOWN)
                         should_block = MouseEvent.XBUTTON3_DOWN in self._blocked_events
@@ -660,11 +712,21 @@ if sys.platform == "win32":
                 elif wParam == WM_XBUTTONUP:
                     xbutton = hiword(mouse_data)
                     if xbutton == XBUTTON1:
-                        event = MouseEvent(MouseEvent.XBUTTON1_UP)
-                        should_block = MouseEvent.XBUTTON1_UP in self._blocked_events
+                        event_type = (
+                            MouseEvent.G502_G4_UP
+                            if self._is_g502_lightspeed()
+                            else MouseEvent.XBUTTON1_UP
+                        )
+                        event = MouseEvent(event_type)
+                        should_block = event_type in self._blocked_events
                     elif xbutton == XBUTTON2:
-                        event = MouseEvent(MouseEvent.XBUTTON2_UP)
-                        should_block = MouseEvent.XBUTTON2_UP in self._blocked_events
+                        event_type = (
+                            MouseEvent.G502_G5_UP
+                            if self._is_g502_lightspeed()
+                            else MouseEvent.XBUTTON2_UP
+                        )
+                        event = MouseEvent(event_type)
+                        should_block = event_type in self._blocked_events
                     elif xbutton == 3:
                         event = MouseEvent(MouseEvent.XBUTTON3_UP)
                         should_block = MouseEvent.XBUTTON3_UP in self._blocked_events
@@ -744,6 +806,31 @@ if sys.platform == "win32":
         def _is_logitech(self, hDevice):
             return "046d" in self._get_device_name(hDevice).lower()
 
+        def _is_g502_lightspeed(self):
+            device = self.connected_device
+            return getattr(device, "key", "") == "g502_lightspeed"
+
+        def _raw_programmable_button_defs(self):
+            if self._is_g502_lightspeed():
+                return _G502_RAW_PROGRAMMABLE_BUTTONS
+            return _RAW_PROGRAMMABLE_BUTTONS
+
+        def _hidpp_mouse_button_spy_defs(self):
+            if self._is_g502_lightspeed():
+                return _G502_HIDPP_MOUSE_BUTTON_SPY_BUTTONS
+            return _HIDPP_MOUSE_BUTTON_SPY_BUTTONS
+
+        def _consumer_hid_button_defs(self):
+            if self._is_g502_lightspeed():
+                return _G502_CONSUMER_HID_BUTTONS
+            return _CONSUMER_HID_BUTTONS
+
+        def _button_mask(self, button_defs):
+            mask = 0
+            for button_mask, *_rest in button_defs:
+                mask |= button_mask
+            return mask
+
         def _ri_wndproc(self, hwnd, msg, wParam, lParam):
             try:
                 return self._ri_wndproc_inner(hwnd, msg, wParam, lParam)
@@ -815,10 +902,14 @@ if sys.platform == "win32":
             buttons = getattr(device, "supported_buttons", ()) or ()
             if any(
                 key in buttons
-                for key in ("xbutton3", "xbutton4", "dpi_switch")
+                for key in (
+                    "xbutton3", "xbutton4", "dpi_switch",
+                    "g502_g4", "g502_g5", "g502_g6",
+                    "g502_g7", "g502_g8", "g502_g9",
+                )
             ):
                 return True
-            for _, down_event, up_event, label in _RAW_PROGRAMMABLE_BUTTONS:
+            for _, down_event, up_event, label in self._raw_programmable_button_defs():
                 if label in ("xbutton1", "xbutton2"):
                     continue
                 if (
@@ -831,12 +922,13 @@ if sys.platform == "win32":
             return False
 
         def _queue_raw_programmable_button_events(self, raw_btns, prev_btns):
-            changed = (raw_btns ^ prev_btns) & _RAW_PROGRAMMABLE_BUTTON_MASK
+            button_defs = self._raw_programmable_button_defs()
+            changed = (raw_btns ^ prev_btns) & self._button_mask(button_defs)
             if changed == 0:
                 return False
 
             dispatched = False
-            for mask, down_event, up_event, label in _RAW_PROGRAMMABLE_BUTTONS:
+            for mask, down_event, up_event, label in button_defs:
                 if not (changed & mask):
                     continue
                 pressed = bool(raw_btns & mask)
@@ -862,7 +954,12 @@ if sys.platform == "win32":
                 return False
 
             dispatched = False
-            for flag, event_type, label in _RAW_FLAG_BUTTONS:
+            button_defs = (
+                _G502_RAW_FLAG_BUTTONS
+                if self._is_g502_lightspeed()
+                else _RAW_FLAG_BUTTONS
+            )
+            for flag, event_type, label in button_defs:
                 if not (button_flags & flag):
                     continue
                 raw_data = {
@@ -937,7 +1034,16 @@ if sys.platform == "win32":
                 return False
             if self._process_hidpp_mouse_button_spy_report(hDevice, report):
                 return True
-            return self._process_consumer_control_report(hDevice, report)
+            if self._process_consumer_control_report(hDevice, report):
+                return True
+            if self._process_g502_onboard_profile_report(hDevice, report):
+                return True
+            if self.debug_mode and self._is_g502_lightspeed():
+                report_hex = " ".join(f"{byte:02X}" for byte in report[:32])
+                message = f"G502 Raw HID unhandled report=[{report_hex}] len={len(report)}"
+                print(f"[MouseHook] {message}")
+                self._emit_debug(message)
+            return False
 
         def _process_hidpp_mouse_button_spy_report(self, hDevice, report):
             if len(report) < 6 or report[0] != 0x11:
@@ -964,14 +1070,16 @@ if sys.platform == "win32":
         def _queue_hidpp_mouse_button_spy_events(
             self, hDevice, button_mask, feat_idx=None, func_sw=None
         ):
+            button_defs = self._hidpp_mouse_button_spy_defs()
+            handled_mask = self._button_mask(button_defs)
             prev_mask = self._prev_hidpp_button_spy.get(hDevice, 0)
             self._prev_hidpp_button_spy[hDevice] = button_mask
             raw_changed = button_mask ^ prev_mask
-            changed = (button_mask ^ prev_mask) & _HIDPP_MOUSE_BUTTON_SPY_MASK
+            changed = (button_mask ^ prev_mask) & handled_mask
             if changed == 0:
                 unknown_changed = raw_changed & ~(
                     _HIDPP_MOUSE_BUTTON_SPY_STANDARD_MASK
-                    | _HIDPP_MOUSE_BUTTON_SPY_MASK
+                    | handled_mask
                 )
                 if unknown_changed:
                     message = (
@@ -984,7 +1092,7 @@ if sys.platform == "win32":
                 return False
 
             dispatched = False
-            for mask, down_event, up_event, label in _HIDPP_MOUSE_BUTTON_SPY_BUTTONS:
+            for mask, down_event, up_event, label in button_defs:
                 if not (changed & mask):
                     continue
                 pressed = bool(button_mask & mask)
@@ -1016,6 +1124,69 @@ if sys.platform == "win32":
                 "hidpp_listener", button_mask, feat_idx, func_sw
             )
 
+        def _process_g502_onboard_profile_report(self, hDevice, report):
+            if not self._is_g502_lightspeed():
+                return False
+            if len(report) < 5 or report[0] != 0x11:
+                return False
+
+            feat_idx = int(report[2])
+            func_sw = int(report[3])
+            listener = getattr(self, "_hid_gesture", None)
+            expected_idx = getattr(listener, "onboard_profiles_index", None)
+            if expected_idx is not None and feat_idx != expected_idx:
+                return False
+            if expected_idx is None and feat_idx != 0x09:
+                return False
+
+            # ONBOARD_PROFILES notification address 0x10 reports the current
+            # DPI slot index.  On factory G502 profiles this is generated by
+            # G7/G8 DPI buttons, so use it as a fallback when the Mouser
+            # onboard profile has not exposed the buttons through Button Spy.
+            if func_sw != 0x10:
+                return False
+
+            dpi_index = int(report[4])
+            prev_index = self._prev_g502_dpi_index.get(hDevice)
+            self._prev_g502_dpi_index[hDevice] = dpi_index
+            if prev_index == dpi_index:
+                return True
+
+            if prev_index is None:
+                direction = "up" if dpi_index > 0 else "down"
+            else:
+                slot_count = _G502_ONBOARD_DPI_SLOT_COUNT
+                forward = (dpi_index - prev_index) % slot_count
+                backward = (prev_index - dpi_index) % slot_count
+                direction = "up" if forward <= backward else "down"
+
+            if direction == "up":
+                down_event = MouseEvent.G502_G8_DOWN
+                up_event = MouseEvent.G502_G8_UP
+                label = "g502_g8"
+            else:
+                down_event = MouseEvent.G502_G7_DOWN
+                up_event = MouseEvent.G502_G7_UP
+                label = "g502_g7"
+
+            raw_data = {
+                "source": "g502_onboard_profile",
+                "button": label,
+                "dpi_index": dpi_index,
+                "previous_dpi_index": prev_index,
+                "feature_index": feat_idx,
+                "func_sw": func_sw,
+            }
+            message = (
+                f"G502 onboard DPI {label} click "
+                f"index={dpi_index} previous={prev_index}"
+            )
+            print(f"[MouseHook] {message}")
+            self._emit_debug(message)
+            self._queue_mouse_event(MouseEvent(down_event, raw_data), "g502_onboard_profile")
+            self._queue_mouse_event(MouseEvent(up_event, raw_data), "g502_onboard_profile")
+            return True
+
         def _process_consumer_control_report(self, hDevice, report):
             if not report:
                 return False
@@ -1026,8 +1197,9 @@ if sys.platform == "win32":
             # factory DPI report uses little-endian usages, while onboard
             # profile consumer bindings on G PRO 2 arrive big-endian.
             offset = 1
+            button_defs = self._consumer_hid_button_defs()
             known_usages = {
-                usage for usage, _down, _up, _label in _CONSUMER_HID_BUTTONS
+                usage for usage, _down, _up, _label in button_defs
             }
             usages = set()
             for i in range(offset, len(report) - 1, 2):
@@ -1050,7 +1222,7 @@ if sys.platform == "win32":
 
             dispatched = False
             handled_usages = set()
-            for usage, down_event, up_event, label in _CONSUMER_HID_BUTTONS:
+            for usage, down_event, up_event, label in button_defs:
                 if usage not in changed:
                     continue
                 pressed = usage in usages
@@ -1107,6 +1279,8 @@ if sys.platform == "win32":
                 (0x01, 0x02),      # Generic mouse
                 (0xFF00, 0x01),    # Lightspeed receiver vendor collection
                 (0xFF00, 0x02),    # Lightspeed receiver HID++ reports
+                (0xFF00, 0x04),    # G502 LIGHTSPEED gaming button reports
+                (0xFFBC, 0x0088),  # Logitech G-series vendor reports
                 (0xFF43, 0x0202),  # Logitech HID++ / legacy devices
                 (0xFF43, 0x0204),
                 (0xFF43, 0x0301),  # G PRO 2 direct USB collections
@@ -1123,8 +1297,8 @@ if sys.platform == "win32":
             if RegisterRawInputDevices(rid, len(usages), sizeof(RAWINPUTDEVICE)):
                 print("[MouseHook] Raw Input: mice + Logitech HID++ + consumer")
                 return True
-            if RegisterRawInputDevices(rid, 3, sizeof(RAWINPUTDEVICE)):
-                print("[MouseHook] Raw Input: mice + Lightspeed HID++")
+            if RegisterRawInputDevices(rid, 5, sizeof(RAWINPUTDEVICE)):
+                print("[MouseHook] Raw Input: mice + Lightspeed HID++ + G-series")
                 return True
             if RegisterRawInputDevices(rid, 1, sizeof(RAWINPUTDEVICE)):
                 print("[MouseHook] Raw Input: mice only")
@@ -1175,6 +1349,7 @@ if sys.platform == "win32":
             self._prev_raw_buttons.clear()
             self._prev_hidpp_button_spy.clear()
             self._prev_consumer_usages.clear()
+            self._prev_g502_dpi_index.clear()
             self._reinstall_hook()
 
         def _reinstall_hook(self):

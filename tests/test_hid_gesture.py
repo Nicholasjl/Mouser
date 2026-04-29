@@ -290,6 +290,27 @@ class HidOnboardProfileModeTests(unittest.TestCase):
             hid_gesture._crc16(profile[:-2]).to_bytes(2, "big"),
         )
 
+    def test_g502_mouser_profile_patches_g_button_slots(self):
+        base = bytearray([0xFF] * 255)
+        base[0x44:0x48] = b"\x90\x02\x00\x00"
+        base[0x48:0x4C] = b"\x90\x01\x00\x00"
+        profile = hid_gesture._build_g502_mouser_profile(bytes(base), 255)
+
+        self.assertEqual(profile[0x2C:0x30], b"\x80\x03\x03\xF3")
+        self.assertEqual(profile[0x30:0x34], b"\x80\x03\x03\xF4")
+        self.assertEqual(profile[0x34:0x38], b"\x80\x03\x03\xF5")
+        self.assertEqual(profile[0x38:0x3C], b"\x80\x03\x03\xF6")
+        self.assertEqual(profile[0x3C:0x40], b"\x80\x03\x03\xF7")
+        self.assertEqual(profile[0x40:0x44], b"\x80\x03\x03\xF8")
+        self.assertEqual(profile[0x44:0x48], b"\x90\x02\x00\x00")
+        self.assertEqual(profile[0x48:0x4C], b"\x90\x01\x00\x00")
+        self.assertEqual(profile[0x6C:0x70], b"\x80\x03\x03\xF3")
+        self.assertEqual(profile[0x80:0x84], b"\x80\x03\x03\xF8")
+        self.assertEqual(
+            profile[-2:],
+            hid_gesture._crc16(profile[:-2]).to_bytes(2, "big"),
+        )
+
     def test_g_pro_2_mouser_profile_patches_dpi_slots(self):
         base = bytearray([0xFF] * 255)
         profile = hid_gesture._build_g_pro_2_mouser_profile(
@@ -411,6 +432,46 @@ class HidOnboardProfileModeTests(unittest.TestCase):
         self.assertEqual(write_mock.call_args_list[1].args[0], 0x0000)
         mode_mock.assert_called_once_with(hid_gesture.ONBOARD_PROFILE_MODE_ENABLED)
         active_mock.assert_called_once_with(0x0002)
+
+    def test_g502_installs_mouser_profile_from_active_profile(self):
+        listener = hid_gesture.HidGestureListener()
+        listener._dev = object()
+        device_spec = SimpleNamespace(key="g502_lightspeed")
+        info = {"size": 255, "sectors": 16, "count": 5}
+        active = bytearray([0xFF] * 255)
+        active[0:3] = b"\x01\x02\x00"
+        active[0x34:0x38] = b"\x90\x07\x00\x00"
+        control = bytearray([0xFF] * 255)
+        control[0:8] = b"\x00\x01\x01\xFF\x00\x02\x01\xFF"
+
+        def fake_read_sector(sector, size):
+            if sector == 0x0000:
+                return bytes(control)
+            if sector == 0x0001:
+                return bytes(active)
+            if sector == hid_gesture.G502_MOUSER_PROFILE_SECTOR:
+                return bytes([0x00] * size)
+            return None
+
+        with (
+            patch.object(listener, "_find_feature", return_value=0x09),
+            patch.object(listener, "_read_onboard_profile_info", return_value=info),
+            patch.object(listener, "_read_active_onboard_profile_sector", return_value=0x0001),
+            patch.object(listener, "_read_onboard_sector", side_effect=fake_read_sector),
+            patch.object(listener, "_write_onboard_sector", return_value=True) as write_mock,
+            patch.object(listener, "_set_onboard_profile_mode", return_value=True) as mode_mock,
+            patch.object(listener, "_set_active_onboard_profile", return_value=True) as active_mock,
+        ):
+            self.assertTrue(listener._ensure_g502_mouser_profile(device_spec))
+
+        self.assertEqual(listener._onboard_profiles_idx, 0x09)
+        self.assertEqual(write_mock.call_args_list[0].args[0], hid_gesture.G502_MOUSER_PROFILE_SECTOR)
+        payload = write_mock.call_args_list[0].args[1]
+        self.assertEqual(payload[0:3], b"\x01\x02\x00")
+        self.assertEqual(payload[0x34:0x38], b"\x80\x03\x03\xF5")
+        self.assertEqual(write_mock.call_args_list[1].args[0], 0x0000)
+        mode_mock.assert_called_once_with(hid_gesture.ONBOARD_PROFILE_MODE_ENABLED)
+        active_mock.assert_called_once_with(hid_gesture.G502_MOUSER_PROFILE_SECTOR)
 
     def test_g_pro_2_onboard_dpi_write_sets_current_profile_slot(self):
         listener = hid_gesture.HidGestureListener()
@@ -647,6 +708,58 @@ class HidBoltReceiverTests(unittest.TestCase):
         enum_mock.assert_not_called()
         self.assertEqual(listener.connected_device.key, "g_pro_2_lightspeed")
         self.assertEqual(listener.mouse_button_spy_index, 0x10)
+
+    def test_g502_lightspeed_receiver_resolves_from_hidpp_name(self):
+        listener = hid_gesture.HidGestureListener()
+        info = {
+            "product_id": 0xC539,
+            "usage_page": 0xFF00,
+            "usage": 0x0002,
+            "source": "hidapi-enumerate",
+            "product_string": "LIGHTSPEED Receiver",
+            "path": b"/dev/hidraw-test",
+        }
+        fake_dev = _FakeHidDevice()
+
+        def fake_find_feature(feature_id):
+            if feature_id == hid_gesture.FEAT_MOUSE_BUTTON_SPY:
+                return 0x10
+            if feature_id == hid_gesture.FEAT_EXT_ADJ_DPI:
+                return 0x0B
+            if feature_id == hid_gesture.FEAT_ONBOARD_PROFILES:
+                return 0x09
+            return None
+
+        with (
+            patch.object(listener, "_vendor_hid_infos", return_value=[info]),
+            patch.object(listener, "_query_device_name", return_value="G502 LIGHTSPEED"),
+            patch.object(listener, "_find_feature", side_effect=fake_find_feature),
+            patch.object(listener, "_enumerate_receiver_devices") as enum_mock,
+            patch.object(listener, "_ensure_g_pro_2_mouser_profile") as gpro_profile_mock,
+            patch.object(listener, "_ensure_g502_mouser_profile") as g502_profile_mock,
+            patch.object(hid_gesture, "HIDAPI_OK", True),
+            patch.object(hid_gesture, "_BACKEND_PREFERENCE", "hidapi"),
+            patch.object(hid_gesture, "_HID_API_STYLE", "hidapi"),
+            patch.object(
+                hid_gesture,
+                "_hid",
+                SimpleNamespace(device=lambda: fake_dev),
+                create=True,
+            ),
+            patch("builtins.print"),
+        ):
+            self.assertTrue(listener._try_connect())
+
+        enum_mock.assert_not_called()
+        gpro_profile_mock.assert_not_called()
+        g502_profile_mock.assert_called_once()
+        self.assertEqual(listener.connected_device.key, "g502_lightspeed")
+        self.assertEqual(listener.connected_device.product_id, 0xC539)
+        self.assertIn("g502_g6", listener.connected_device.supported_buttons)
+        self.assertIn("g502_g9", listener.connected_device.supported_buttons)
+        self.assertIn("hscroll_left", listener.connected_device.supported_buttons)
+        self.assertEqual(listener.mouse_button_spy_index, 0x10)
+        self.assertEqual(listener.onboard_profiles_index, 0x09)
 
     def test_divert_failure_continues_to_next_receiver_slot(self):
         """When divert fails on one slot (e.g. keyboard), the loop

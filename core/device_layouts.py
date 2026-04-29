@@ -279,12 +279,107 @@ G_PRO_2_LIGHTSPEED_LAYOUT = {
     ],
 }
 
+G502_LIGHTSPEED_LAYOUT = {
+    "key": "g502_lightspeed",
+    "label": "G502 LIGHTSPEED",
+    "image_asset": "g502_lightspeed.png",
+    "image_width": 620,
+    "image_height": 414,
+    "interactive": True,
+    "manual_selectable": True,
+    "note": "",
+    "hotspots": [
+        {
+            "buttonKey": "middle",
+            "label": "Middle button",
+            "summaryType": "mapping",
+            "normX": 0.365,
+            "normY": 0.420,
+            "labelSide": "left",
+            "labelOffX": -254,
+            "labelOffY": 36,
+        },
+        {
+            "buttonKey": "g502_g4",
+            "label": "G4 Rear thumb button",
+            "summaryType": "mapping",
+            "normX": 0.717,
+            "normY": 0.438,
+            "labelSide": "right",
+            "labelOffX": 208,
+            "labelOffY": -90,
+        },
+        {
+            "buttonKey": "g502_g5",
+            "label": "G5 Front thumb button",
+            "summaryType": "mapping",
+            "normX": 0.627,
+            "normY": 0.527,
+            "labelSide": "right",
+            "labelOffX": 264,
+            "labelOffY": 0,
+        },
+        {
+            "buttonKey": "g502_g6",
+            "label": "G6 DPI shift / sniper button",
+            "summaryType": "mapping",
+            "normX": 0.590,
+            "normY": 0.695,
+            "labelSide": "right",
+            "labelOffX": 128,
+            "labelOffY": 74,
+        },
+        {
+            "buttonKey": "g502_g8",
+            "label": "G8 Front top button",
+            "summaryType": "mapping",
+            "normX": 0.432,
+            "normY": 0.682,
+            "labelSide": "left",
+            "labelOffX": -290,
+            "labelOffY": 74,
+        },
+        {
+            "buttonKey": "g502_g7",
+            "label": "G7 Top button",
+            "summaryType": "mapping",
+            "normX": 0.468,
+            "normY": 0.621,
+            "labelSide": "left",
+            "labelOffX": -290,
+            "labelOffY": 28,
+        },
+        {
+            "buttonKey": "g502_g9",
+            "label": "G9 Rear top button",
+            "summaryType": "mapping",
+            "normX": 0.505,
+            "normY": 0.260,
+            "labelSide": "left",
+            "labelOffX": -170,
+            "labelOffY": -90,
+        },
+        {
+            "buttonKey": "hscroll_left",
+            "label": "Wheel tilt",
+            "summaryType": "hscroll",
+            "isHScroll": True,
+            "normX": 0.365,
+            "normY": 0.385,
+            "labelSide": "left",
+            "labelOffX": -204,
+            "labelOffY": -28,
+        },
+    ],
+}
+
 DEVICE_LAYOUTS = {
     "mx_master": MX_MASTER_LAYOUT,
     "mx_anywhere": MX_ANYWHERE_LAYOUT,
     "mx_vertical": MX_VERTICAL_LAYOUT,
     "generic_mouse": GENERIC_MOUSE_LAYOUT,
     "g_pro_2_lightspeed": G_PRO_2_LIGHTSPEED_LAYOUT,
+    "g502_lightspeed": G502_LIGHTSPEED_LAYOUT,
 }
 
 # Maps a device-specific key like "mx_master_3s" to its family layout key.
@@ -299,6 +394,7 @@ _FAMILY_FALLBACKS = {
     "mx_anywhere_3": "mx_anywhere",
     "mx_anywhere_2s": "mx_anywhere",
     "g_pro_2_lightspeed": "g_pro_2_lightspeed",
+    "g502_lightspeed": "g502_lightspeed",
 }
 
 

@@ -132,6 +132,12 @@ class ConfigMigrationTests(unittest.TestCase):
             loaded["profiles"]["default"]["mappings"]["dpi_switch"], "cycle_dpi"
         )
         self.assertEqual(
+            loaded["profiles"]["default"]["mappings"]["g502_g8"], "cycle_dpi"
+        )
+        self.assertEqual(
+            loaded["profiles"]["default"]["mappings"]["g502_g9"], "none"
+        )
+        self.assertEqual(
             loaded["profiles"]["default"]["mappings"]["gesture_left"], "none"
         )
 
@@ -414,7 +420,7 @@ class AppCatalogTests(unittest.TestCase):
                         "Type=Application",
                         "Name=Visual Studio Code",
                         "StartupWMClass=code-oss",
-                        f"Exec=env BAMF_DESKTOP_FILE_HINT=/usr/share/applications/code.desktop {exec_path} --new-window %F",
+                        f"Exec=env BAMF_DESKTOP_FILE_HINT=/usr/share/applications/code.desktop {exec_path.as_posix()} --new-window %F",
                     ]
                 ),
                 encoding="utf-8",
