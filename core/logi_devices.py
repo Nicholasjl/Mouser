@@ -231,7 +231,7 @@ KNOWN_LOGI_DEVICES = (
         # USB PIDs are seen when the mouse is connected directly.
         product_ids=(0x40BD, 0xC0A8, 0xC09A),
         ui_layout="g_pro_2_lightspeed",
-        image_asset="icons/g_pro_2_lightspeed.svg",
+        image_asset="gpro_2_lightspeed.png",
         supported_buttons=G_PRO_2_LIGHTSPEED_BUTTONS,
         gesture_cids=(),
         dpi_min=100,

@@ -7,8 +7,8 @@
 English | [中文文档](README_CN.md)
 
 A lightweight, open-source, fully local alternative to **Logitech Options+** for
-remapping Logitech HID++ mice. The current best experience is on the **MX Master**
-family, with early detection and fallback UI support for additional Logitech models.
+remapping Logitech HID++ mice, with dedicated interactive layouts for the main
+supported families and fallback UI support for additional Logitech models.
 
 No telemetry. No cloud. No Logitech account required.
 
@@ -37,7 +37,7 @@ No telemetry. No cloud. No Logitech account required.
 - **Bluetooth and Logi Bolt** — works with both Bluetooth and Logi Bolt USB receivers; connection type shown in the UI
 - **Auto-reconnection** — detects power-off/on and restores full functionality without restarting
 - **Live connection status** — real-time "Connected" / "Not Connected" badge in the UI
-- **Device-aware UI** — interactive MX Master diagram with clickable hotspots; generic fallback for other models
+- **Device-aware UI** — interactive diagrams with clickable hotspots for supported Logitech layouts; generic fallback for other models
 
 ### 🌐 Multi-Language UI
 - **English / Simplified Chinese / Traditional Chinese** - switch instantly in-app, no restart required
@@ -64,11 +64,12 @@ No telemetry. No cloud. No Logitech account required.
 | Family / model | Detection + HID++ probing | UI support |
 |---|---|---|
 | MX Master 4 / 3S / 3 / 2S / MX Master | Yes | Dedicated interactive `mx_master` layout |
-| MX Anywhere 3S / 3 / 2S | Yes | Generic fallback card, experimental manual override |
-| MX Vertical | Yes | Generic fallback card |
+| MX Anywhere 3S / 3 / 2S | Yes | Dedicated interactive `mx_anywhere` layout |
+| MX Vertical | Yes | Dedicated interactive `mx_vertical` layout |
+| G PRO 2 LIGHTSPEED / PRO X 2 Superstrike | Yes | Dedicated interactive `g_pro_2_lightspeed` layout |
 | Unknown Logitech HID++ mice | Best effort by PID/name | Generic fallback card |
 
-> **Note:** Only the MX Master family currently has a dedicated visual overlay. Other devices can still be detected, show their model name in the UI, and try the experimental layout override picker, but button positions may not line up until a real overlay is added.
+> **Note:** Dedicated overlays are available for MX Master, MX Anywhere, MX Vertical, and G PRO 2 LIGHTSPEED families. Other Logitech HID++ devices can still be detected, show their model name in the UI, and use the generic fallback card.
 
 ## Default Mappings
 
@@ -151,7 +152,7 @@ For macOS Accessibility permissions and login-item notes, see the [macOS Setup G
 
 - **Windows 10/11**, **macOS 12+ (Monterey)**, or **Linux (experimental; X11 plus KDE Wayland app detection)**
 - **Python 3.10+** (tested with 3.14)
-- **A supported Logitech HID++ mouse** paired via Bluetooth or USB receiver. MX Master-family devices currently have the most complete UI support.
+- **A supported Logitech HID++ mouse** paired via Bluetooth or USB receiver. Dedicated interactive layouts are available for MX Master, MX Anywhere, MX Vertical, and G PRO 2 LIGHTSPEED families.
 - **Logitech Options+ must NOT be running** (it conflicts with HID++ access)
 - **macOS only:** Accessibility permission required (System Settings → Privacy & Security → Accessibility)
 - **Linux only:** `xdotool` enables per-app profile switching on X11; `kdotool` additionally enables KDE Wayland detection
@@ -424,7 +425,7 @@ The app has two pages accessible from a slim sidebar:
 ### Mouse & Profiles (Page 1)
 
 - **Left panel:** List of profiles. The "Default (All Apps)" profile is always present. Per-app profiles show the app icon and name. Select a profile to edit its mappings.
-- **Right panel:** Device-aware mouse view. MX Master-family devices get clickable hotspot dots on the image; unsupported layouts fall back to a generic device card with an experimental "try another supported map" picker.
+- **Right panel:** Device-aware mouse view. Supported layouts get clickable hotspot dots on the image; unsupported layouts fall back to a generic device card with an experimental "try another supported map" picker.
 - **Add profile:** ComboBox at the bottom lists known apps (Chrome, Edge, VS Code, VLC, etc.). Click "+" to create a per-app profile.
 
 ### Point & Scroll (Page 2)
@@ -439,7 +440,7 @@ The app has two pages accessible from a slim sidebar:
 
 ## Known Limitations
 
-- **Early multi-device support** — only the MX Master family currently has a dedicated interactive overlay; MX Anywhere, MX Vertical, and unknown Logitech mice still use the generic fallback card
+- **Early multi-device support** — dedicated interactive overlays cover MX Master, MX Anywhere, MX Vertical, and G PRO 2 LIGHTSPEED; unknown Logitech mice still use the generic fallback card
 - **Per-device mappings are not fully separated yet** — layout overrides are stored per detected device, but profile mappings are still global rather than truly device-specific
 - **Bluetooth and Logi Bolt supported** — HID++ gesture button divert works over both Bluetooth and Logi Bolt USB receivers
 - **Conflicts with Logitech Options+** — both apps fight over HID++ access; quit Options+ before running Mouser
@@ -479,7 +480,7 @@ Contributions are welcome! To get started:
 
 1. Fork the repo and create a feature branch
 2. Set up the dev environment (see [Installation](#installation))
-3. Make your changes and test with a supported Logitech HID++ mouse (MX Master family preferred for now)
+3. Make your changes and test with a supported Logitech HID++ mouse
 4. Submit a pull request with a clear description
 
 ### Areas where help is needed

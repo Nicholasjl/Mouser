@@ -1,4 +1,5 @@
 import unittest
+from pathlib import Path
 
 from core.device_layouts import get_device_layout, get_manual_layout_choices
 
@@ -25,6 +26,7 @@ class DeviceLayoutTests(unittest.TestCase):
         self.assertIn({"key": "mx_master", "label": "MX Master family"}, choices)
         self.assertIn({"key": "mx_anywhere", "label": "MX Anywhere family"}, choices)
         self.assertIn({"key": "mx_vertical", "label": "MX Vertical family"}, choices)
+        self.assertIn({"key": "g_pro_2_lightspeed", "label": "G PRO 2 LIGHTSPEED"}, choices)
 
     def test_mx_anywhere_layout_is_interactive(self):
         layout = get_device_layout("mx_anywhere")
@@ -39,6 +41,21 @@ class DeviceLayoutTests(unittest.TestCase):
         self.assertTrue(layout["interactive"])
         self.assertEqual(layout["image_asset"], "mx_vertical.png")
         self.assertGreater(len(layout["hotspots"]), 0)
+
+    def test_g_pro_2_lightspeed_layout_is_interactive(self):
+        layout = get_device_layout("g_pro_2_lightspeed")
+
+        self.assertEqual(layout["key"], "g_pro_2_lightspeed")
+        self.assertTrue(layout["interactive"])
+        self.assertEqual(layout["image_asset"], "gpro_2_lightspeed.png")
+        self.assertEqual(layout["image_width"], 460)
+        self.assertEqual(layout["image_height"], 360)
+        self.assertEqual(
+            {hotspot["buttonKey"] for hotspot in layout["hotspots"]},
+            {"middle", "xbutton1", "xbutton2", "xbutton3", "xbutton4", "dpi_switch"},
+        )
+        asset = Path(__file__).resolve().parents[1] / "images" / layout["image_asset"]
+        self.assertTrue(asset.exists())
 
 
 if __name__ == "__main__":
