@@ -235,7 +235,7 @@ KNOWN_LOGI_DEVICES = (
         supported_buttons=G_PRO_2_LIGHTSPEED_BUTTONS,
         gesture_cids=(),
         dpi_min=100,
-        dpi_max=32000,
+        dpi_max=44000,
     ),
 )
 

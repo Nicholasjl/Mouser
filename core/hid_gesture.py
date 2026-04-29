@@ -497,6 +497,15 @@ DEFAULT_GESTURE_CID = DEFAULT_GESTURE_CIDS[0]
 G_PRO_2_MOUSER_PROFILE_SECTOR = 0x0002
 G_PRO_2_ROM_PROFILE_SECTOR = 0x0101
 G_PRO_2_ROM_CONTROL_SECTOR = 0x0100
+ONBOARD_PROFILE_MODE_ENABLED = 0x01
+ONBOARD_PROFILE_MODE_SOFTWARE = 0x02
+G_PRO_2_PROFILE_DPI_DEFAULT_INDEX_OFFSET = 0x01
+G_PRO_2_PROFILE_DPI_SHIFT_INDEX_OFFSET = 0x02
+G_PRO_2_PROFILE_DPI_HEADER_OFFSET = 0x03
+G_PRO_2_PROFILE_DPI_RESOLUTIONS_OFFSET = 0x04
+G_PRO_2_PROFILE_DPI_SLOTS = 5
+G_PRO_2_PROFILE_DPI_SLOT_SIZE = 5
+G_PRO_2_PROFILE_DPI_LOD_DEFAULT = 0x02
 G_PRO_2_MOUSER_CONSUMER_USAGES = {
     "dpi_switch": 0x00FD,
     "right_back": 0x03F1,
@@ -663,10 +672,74 @@ def _build_onboard_control_sector(size, profile_sector, headers=None, max_profil
     return _append_profile_crc(body, size)
 
 
-def _build_g_pro_2_mouser_profile(base_profile, size):
+def _read_g_pro_2_profile_dpi(profile):
+    if not profile:
+        return None
+    min_size = (
+        G_PRO_2_PROFILE_DPI_RESOLUTIONS_OFFSET
+        + G_PRO_2_PROFILE_DPI_SLOTS * G_PRO_2_PROFILE_DPI_SLOT_SIZE
+    )
+    if len(profile) < min_size:
+        return None
+
+    default_idx = int(profile[G_PRO_2_PROFILE_DPI_DEFAULT_INDEX_OFFSET])
+    indices = []
+    if 0 <= default_idx < G_PRO_2_PROFILE_DPI_SLOTS:
+        indices.append(default_idx)
+    indices.extend(
+        idx for idx in range(G_PRO_2_PROFILE_DPI_SLOTS) if idx not in indices
+    )
+    for idx in indices:
+        offset = (
+            G_PRO_2_PROFILE_DPI_RESOLUTIONS_OFFSET
+            + idx * G_PRO_2_PROFILE_DPI_SLOT_SIZE
+        )
+        x_dpi = int.from_bytes(profile[offset:offset + 2], "little")
+        y_dpi = int.from_bytes(profile[offset + 2:offset + 4], "little")
+        dpi = x_dpi if x_dpi == y_dpi else (x_dpi or y_dpi)
+        if dpi and dpi != 0xFFFF:
+            return dpi
+    return None
+
+
+def _patch_g_pro_2_profile_dpi(body, dpi):
+    min_size = (
+        G_PRO_2_PROFILE_DPI_RESOLUTIONS_OFFSET
+        + G_PRO_2_PROFILE_DPI_SLOTS * G_PRO_2_PROFILE_DPI_SLOT_SIZE
+    )
+    if len(body) < min_size:
+        return False
+    dpi = int(dpi)
+    if dpi <= 0 or dpi > 0xFFFF:
+        return False
+
+    body[G_PRO_2_PROFILE_DPI_DEFAULT_INDEX_OFFSET] = 0x00
+    body[G_PRO_2_PROFILE_DPI_SHIFT_INDEX_OFFSET] = 0x00
+    if body[G_PRO_2_PROFILE_DPI_HEADER_OFFSET] == 0xFF:
+        body[G_PRO_2_PROFILE_DPI_HEADER_OFFSET] = 0x00
+    # G PRO 2 profile format 7 stores each DPI slot as:
+    # X little-endian, Y little-endian, then LOD.
+    dpi_bytes = dpi.to_bytes(2, "little")
+    for idx in range(G_PRO_2_PROFILE_DPI_SLOTS):
+        offset = (
+            G_PRO_2_PROFILE_DPI_RESOLUTIONS_OFFSET
+            + idx * G_PRO_2_PROFILE_DPI_SLOT_SIZE
+        )
+        lod = body[offset + 4]
+        if lod not in (0x01, 0x02):
+            lod = G_PRO_2_PROFILE_DPI_LOD_DEFAULT
+        body[offset:offset + G_PRO_2_PROFILE_DPI_SLOT_SIZE] = (
+            dpi_bytes + dpi_bytes + bytes([lod])
+        )
+    return True
+
+
+def _build_g_pro_2_mouser_profile(base_profile, size, dpi=None):
     if not base_profile or len(base_profile) < size:
         return None
     body = bytearray(base_profile[:max(0, size - 2)])
+    if dpi is not None and not _patch_g_pro_2_profile_dpi(body, dpi):
+        return None
     for offset, subtype, value, _name in G_PRO_2_MOUSER_BUTTON_MAPPINGS:
         if offset + 4 > len(body):
             return None
@@ -1632,15 +1705,22 @@ class HidGestureListener:
         print(f"[HidGesture] ONBOARD_PROFILES active sector 0x{sector:04X} failed")
         return False
 
-    def _ensure_g_pro_2_mouser_profile(self, device_spec=None):
-        """Install a G PRO 2 profile that exposes right-side and DPI buttons.
+    def _set_onboard_current_dpi_index(self, index):
+        if self._onboard_profiles_idx is None:
+            return False
+        resp = self._request(
+            self._onboard_profiles_idx,
+            12,
+            [index & 0xFF],
+            timeout_ms=800,
+        )
+        if resp:
+            print(f"[HidGesture] ONBOARD_PROFILES current DPI index set to {index}")
+            return True
+        print(f"[HidGesture] ONBOARD_PROFILES current DPI index {index} failed")
+        return False
 
-        The factory onboard profile maps left/right side buttons to the same
-        two mouse button codes and keeps the DPI button as an internal function.
-        Mouser needs independent button reports, so it writes a small flash
-        profile copied from the read-only factory profile with only those
-        button mappings changed.
-        """
+    def _write_g_pro_2_mouser_profile(self, device_spec=None, dpi=None):
         if getattr(device_spec, "key", "") != "g_pro_2_lightspeed":
             return False
         if self._dev is None:
@@ -1663,12 +1743,18 @@ class HidGestureListener:
             )
             return False
 
+        current_profile = self._read_onboard_sector(
+            G_PRO_2_MOUSER_PROFILE_SECTOR, size
+        )
+        if dpi is None:
+            dpi = _read_g_pro_2_profile_dpi(current_profile)
+
         base_profile = self._read_onboard_sector(G_PRO_2_ROM_PROFILE_SECTOR, size)
         if base_profile is None:
             print("[HidGesture] G PRO 2 read-only profile read failed")
             return False
 
-        profile_payload = _build_g_pro_2_mouser_profile(base_profile, size)
+        profile_payload = _build_g_pro_2_mouser_profile(base_profile, size, dpi=dpi)
         if profile_payload is None:
             print("[HidGesture] G PRO 2 Mouser profile build failed")
             return False
@@ -1685,17 +1771,94 @@ class HidGestureListener:
             return False
         if not self._write_onboard_sector(0x0000, control_payload):
             return False
-        if not self._set_onboard_profile_mode(0x01):
+        if not self._set_onboard_profile_mode(ONBOARD_PROFILE_MODE_ENABLED):
             return False
         if not self._set_active_onboard_profile(G_PRO_2_MOUSER_PROFILE_SECTOR):
             return False
 
+        dpi_note = f" profile_dpi={int(dpi)}" if dpi is not None else ""
         print(
             "[HidGesture] G PRO 2 Mouser onboard profile active "
             "(dpi=consumer:0x00FD right_back=consumer:0x03F1 "
-            "right_front=consumer:0x03F2)"
+            f"right_front=consumer:0x03F2{dpi_note})"
         )
         return True
+
+    def _ensure_g_pro_2_mouser_profile(self, device_spec=None):
+        """Install a G PRO 2 profile that exposes right-side and DPI buttons.
+
+        The factory onboard profile maps left/right side buttons to the same
+        two mouse button codes and keeps the DPI button as an internal function.
+        Mouser needs independent button reports, so it writes a small flash
+        profile copied from the read-only factory profile with those button
+        mappings changed.  If a previous Mouser profile already has a custom
+        DPI, keep it instead of reverting to the factory resolution list.
+        """
+        return self._write_g_pro_2_mouser_profile(device_spec, dpi=None)
+
+    def _set_g_pro_2_onboard_dpi(self, dpi):
+        device_spec = self._connected_device_info
+        if getattr(device_spec, "key", "") != "g_pro_2_lightspeed":
+            return False
+        if not self._write_g_pro_2_mouser_profile(device_spec, dpi=dpi):
+            return False
+        if not self._set_onboard_current_dpi_index(0):
+            return False
+        print(
+            f"[HidGesture] DPI set to {int(dpi)} via G PRO 2 onboard profile "
+            "X/Y slots"
+        )
+        return True
+
+    def _set_extended_dpi_direct(self, dpi):
+        if self._dpi_idx is None or self._dev is None:
+            return False
+        dpi = int(dpi)
+        hi = (dpi >> 8) & 0xFF
+        lo = dpi & 0xFF
+        lod = 0x02
+        read = self._request(self._dpi_idx, 5, [0x00], timeout_ms=800)
+        if read:
+            params = read[4]
+            if len(params) > 9 and params[9] in (0x00, 0x01, 0x02):
+                lod = params[9]
+        resp = self._request(
+            self._dpi_idx,
+            6,
+            [0x00, hi, lo, hi, lo, lod],
+            timeout_ms=1200,
+        )
+        if resp:
+            _, _, _, _, params = resp
+            actual = self._parse_dpi_response(params) or dpi
+            print(
+                f"[HidGesture] EXT_ADJ_DPI set X/Y to {actual} "
+                f"lod=0x{lod:02X}"
+            )
+            return True
+        return False
+
+    def _read_g_pro_2_onboard_dpi(self):
+        device_spec = self._connected_device_info
+        if getattr(device_spec, "key", "") != "g_pro_2_lightspeed":
+            return None
+        if self._dev is None:
+            return None
+        if self._onboard_profiles_idx is None:
+            self._onboard_profiles_idx = self._find_feature(FEAT_ONBOARD_PROFILES)
+        if self._onboard_profiles_idx is None:
+            return None
+        info = self._read_onboard_profile_info()
+        if not info:
+            return None
+        size = int(info.get("size") or 0)
+        if size <= 0:
+            return None
+        profile = self._read_onboard_sector(G_PRO_2_MOUSER_PROFILE_SECTOR, size)
+        dpi = _read_g_pro_2_profile_dpi(profile)
+        if dpi:
+            print(f"[HidGesture] Current DPI = {dpi} (G PRO 2 onboard profile)")
+        return dpi
 
     def _restore_onboard_profiles(self):
         if (
@@ -1743,6 +1906,10 @@ class HidGestureListener:
             self._dpi_result = False
             self._pending_dpi = None
             return
+        if self._set_g_pro_2_onboard_dpi(dpi):
+            self._dpi_result = True
+            self._pending_dpi = None
+            return
         hi = (dpi >> 8) & 0xFF
         lo = dpi & 0xFF
         if self._dpi_extended:
@@ -1781,6 +1948,11 @@ class HidGestureListener:
         """Called from the listener thread to read current DPI."""
         if self._dpi_idx is None or self._dev is None:
             self._dpi_result = None
+            self._pending_dpi = None
+            return
+        onboard_dpi = self._read_g_pro_2_onboard_dpi()
+        if onboard_dpi:
+            self._dpi_result = onboard_dpi
             self._pending_dpi = None
             return
         # getSensorDpi: function 2 for 0x2201, function 5 for 0x2202.

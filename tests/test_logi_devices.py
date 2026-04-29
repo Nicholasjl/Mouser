@@ -78,6 +78,7 @@ class LogiDeviceRegistryTests(unittest.TestCase):
                 device = resolve_device(product_id=product_id)
                 self.assertIsNotNone(device)
                 self.assertEqual(device.key, "g_pro_2_lightspeed")
+                self.assertEqual(device.dpi_max, 44000)
                 self.assertIn("xbutton3", device.supported_buttons)
                 self.assertIn("xbutton4", device.supported_buttons)
 
@@ -91,6 +92,12 @@ class LogiDeviceRegistryTests(unittest.TestCase):
                 device = resolve_device(product_name=name)
                 self.assertIsNotNone(device)
                 self.assertEqual(device.key, "g_pro_2_lightspeed")
+
+    def test_clamp_dpi_uses_g_pro_2_lightspeed_bounds(self):
+        info = build_connected_device_info(product_id=0x40BD)
+
+        self.assertEqual(clamp_dpi(50000, info), 44000)
+        self.assertEqual(clamp_dpi(50, info), 100)
 
 
 if __name__ == "__main__":

@@ -68,8 +68,11 @@ def _format_debug_details(raw_data):
 if sys.platform == "win32":
     import ctypes
     import ctypes.wintypes as wintypes
-    from ctypes import (CFUNCTYPE, POINTER, Structure, c_int, c_uint, c_ushort,
+    from ctypes import (POINTER, Structure, c_int, c_uint, c_ushort,
                         c_ulong, c_void_p, sizeof, byref, create_string_buffer, windll)
+
+    CALLBACK_FUNCTYPE = getattr(ctypes, "WINFUNCTYPE", ctypes.CFUNCTYPE)
+    LRESULT = getattr(wintypes, "LRESULT", wintypes.LPARAM)
 
     # Windows constants
     WH_MOUSE_LL = 14
@@ -93,14 +96,16 @@ if sys.platform == "win32":
             ("dwExtraInfo", ctypes.POINTER(ctypes.c_ulong)),
         ]
 
-    HOOKPROC = CFUNCTYPE(ctypes.c_long, c_int, wintypes.WPARAM, ctypes.POINTER(MSLLHOOKSTRUCT))
+    HOOKPROC = CALLBACK_FUNCTYPE(
+        LRESULT, c_int, wintypes.WPARAM, ctypes.POINTER(MSLLHOOKSTRUCT)
+    )
 
     SetWindowsHookExW = windll.user32.SetWindowsHookExW
     SetWindowsHookExW.restype = wintypes.HHOOK
     SetWindowsHookExW.argtypes = [c_int, HOOKPROC, wintypes.HINSTANCE, wintypes.DWORD]
 
     CallNextHookEx = windll.user32.CallNextHookEx
-    CallNextHookEx.restype = ctypes.c_long
+    CallNextHookEx.restype = LRESULT
     CallNextHookEx.argtypes = [wintypes.HHOOK, c_int, wintypes.WPARAM, ctypes.POINTER(MSLLHOOKSTRUCT)]
 
     UnhookWindowsHookEx = windll.user32.UnhookWindowsHookEx
@@ -165,8 +170,9 @@ if sys.platform == "win32":
             ("dwCount", c_ulong),
         ]
 
-    WNDPROC_TYPE = CFUNCTYPE(ctypes.c_longlong, wintypes.HWND, c_uint,
-                              wintypes.WPARAM, wintypes.LPARAM)
+    WNDPROC_TYPE = CALLBACK_FUNCTYPE(
+        LRESULT, wintypes.HWND, c_uint, wintypes.WPARAM, wintypes.LPARAM
+    )
 
     class WNDCLASSEXW(Structure):
         _fields_ = [
@@ -201,7 +207,7 @@ if sys.platform == "win32":
 
     ShowWindow = windll.user32.ShowWindow
     DefWindowProcW = windll.user32.DefWindowProcW
-    DefWindowProcW.restype = ctypes.c_longlong
+    DefWindowProcW.restype = LRESULT
     DefWindowProcW.argtypes = [wintypes.HWND, c_uint, wintypes.WPARAM, wintypes.LPARAM]
 
     TranslateMessage = windll.user32.TranslateMessage
@@ -739,6 +745,20 @@ if sys.platform == "win32":
             return "046d" in self._get_device_name(hDevice).lower()
 
         def _ri_wndproc(self, hwnd, msg, wParam, lParam):
+            try:
+                return self._ri_wndproc_inner(hwnd, msg, wParam, lParam)
+            except BaseException as exc:
+                try:
+                    print(f"[MouseHook] CRITICAL _ri_wndproc EXCEPTION: {exc}")
+                    import traceback; traceback.print_exc()
+                except Exception:
+                    pass
+                try:
+                    return DefWindowProcW(hwnd, msg, wParam, lParam)
+                except Exception:
+                    return 0
+
+        def _ri_wndproc_inner(self, hwnd, msg, wParam, lParam):
             if msg == WM_INPUT:
                 try:
                     self._process_raw_input(lParam)

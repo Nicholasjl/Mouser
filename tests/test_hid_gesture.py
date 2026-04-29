@@ -290,6 +290,29 @@ class HidOnboardProfileModeTests(unittest.TestCase):
             hid_gesture._crc16(profile[:-2]).to_bytes(2, "big"),
         )
 
+    def test_g_pro_2_mouser_profile_patches_dpi_slots(self):
+        base = bytearray([0xFF] * 255)
+        profile = hid_gesture._build_g_pro_2_mouser_profile(
+            bytes(base), 255, dpi=44000
+        )
+
+        slot = (44000).to_bytes(2, "little") * 2 + b"\x02"
+        self.assertEqual(profile[0x01:0x04], b"\x00\x00\x00")
+        self.assertEqual(profile[0x04:0x1D], slot * 5)
+        self.assertEqual(hid_gesture._read_g_pro_2_profile_dpi(profile), 44000)
+        self.assertEqual(
+            profile[-2:],
+            hid_gesture._crc16(profile[:-2]).to_bytes(2, "big"),
+        )
+
+    def test_read_g_pro_2_profile_dpi_uses_default_slot(self):
+        profile = bytearray([0xFF] * 255)
+        profile[0x01] = 2
+        profile[0x0E:0x10] = (3200).to_bytes(2, "little")
+        profile[0x10:0x12] = (3200).to_bytes(2, "little")
+
+        self.assertEqual(hid_gesture._read_g_pro_2_profile_dpi(profile), 3200)
+
     def test_control_sector_adds_mouser_profile_and_preserves_headers(self):
         payload = hid_gesture._build_onboard_control_sector(
             255,
@@ -335,8 +358,64 @@ class HidOnboardProfileModeTests(unittest.TestCase):
         self.assertEqual(listener._onboard_profiles_idx, 0x0F)
         self.assertEqual(write_mock.call_args_list[0].args[0], 0x0002)
         self.assertEqual(write_mock.call_args_list[1].args[0], 0x0000)
-        mode_mock.assert_called_once_with(0x01)
+        mode_mock.assert_called_once_with(hid_gesture.ONBOARD_PROFILE_MODE_ENABLED)
         active_mock.assert_called_once_with(0x0002)
+
+    def test_g_pro_2_onboard_dpi_write_sets_current_profile_slot(self):
+        listener = hid_gesture.HidGestureListener()
+        listener._connected_device_info = SimpleNamespace(key="g_pro_2_lightspeed")
+
+        with (
+            patch.object(listener, "_write_g_pro_2_mouser_profile", return_value=True) as write_mock,
+            patch.object(listener, "_set_onboard_current_dpi_index", return_value=True) as dpi_index_mock,
+        ):
+            self.assertTrue(listener._set_g_pro_2_onboard_dpi(44000))
+
+        write_mock.assert_called_once_with(
+            listener._connected_device_info, dpi=44000
+        )
+        dpi_index_mock.assert_called_once_with(0)
+
+    def test_g_pro_2_onboard_dpi_fails_when_current_slot_cannot_be_applied(self):
+        listener = hid_gesture.HidGestureListener()
+        listener._connected_device_info = SimpleNamespace(key="g_pro_2_lightspeed")
+
+        with (
+            patch.object(listener, "_write_g_pro_2_mouser_profile", return_value=True),
+            patch.object(listener, "_set_onboard_current_dpi_index", return_value=False),
+        ):
+            self.assertFalse(listener._set_g_pro_2_onboard_dpi(44000))
+
+    def test_onboard_current_dpi_index_uses_profile_function_12(self):
+        listener = hid_gesture.HidGestureListener()
+        listener._onboard_profiles_idx = 0x0F
+
+        with patch.object(listener, "_request", return_value=(1, 0x0F, 12, 0x0A, [])) as req_mock:
+            self.assertTrue(listener._set_onboard_current_dpi_index(0))
+
+        req_mock.assert_called_once_with(
+            0x0F,
+            12,
+            [0],
+            timeout_ms=800,
+        )
+
+    def test_extended_dpi_direct_writes_matching_x_and_y(self):
+        listener = hid_gesture.HidGestureListener()
+        listener._dpi_idx = 0x0B
+        listener._dev = object()
+
+        def fake_request(feat, func, params, timeout_ms=2000):
+            if func == 5:
+                return (1, feat, func, 0x0A, [0, 3, 32, 3, 32, 3, 32, 3, 32, 1])
+            if func == 6:
+                return (1, feat, func, 0x0A, list(params))
+            return None
+
+        with patch.object(listener, "_request", side_effect=fake_request) as req_mock:
+            self.assertTrue(listener._set_extended_dpi_direct(44000))
+
+        req_mock.assert_any_call(0x0B, 6, [0x00, 0xAB, 0xE0, 0xAB, 0xE0, 0x01], timeout_ms=1200)
 
     def test_onboard_profile_mode_restore_reenables_previous_mode(self):
         listener = hid_gesture.HidGestureListener()

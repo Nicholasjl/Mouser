@@ -1,4 +1,5 @@
 import importlib
+import ctypes
 import sys
 import unittest
 from types import SimpleNamespace
@@ -355,6 +356,14 @@ class LinuxMouseHookReconnectTests(unittest.TestCase):
 
 @unittest.skipUnless(sys.platform == "win32", "Windows-only raw input tests")
 class WindowsRawInputExtraButtonTests(unittest.TestCase):
+    def test_win32_callbacks_use_pointer_sized_lresult(self):
+        self.assertEqual(
+            ctypes.sizeof(mouse_hook.LRESULT),
+            ctypes.sizeof(mouse_hook.wintypes.LPARAM),
+        )
+        self.assertEqual(mouse_hook.CallNextHookEx.restype, mouse_hook.LRESULT)
+        self.assertEqual(mouse_hook.DefWindowProcW.restype, mouse_hook.LRESULT)
+
     def test_raw_programmable_bits_dispatch_side_buttons_and_dpi(self):
         hook = mouse_hook.MouseHook()
         hook._connected_device = SimpleNamespace(

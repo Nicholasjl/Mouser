@@ -16,7 +16,7 @@ Item {
         { label: s["scroll.light"],  value: "light"  },
         { label: s["scroll.dark"],   value: "dark"   }
     ]
-    readonly property var allDpiPresets: [400, 800, 1000, 1600, 2400, 4000, 6000, 8000]
+    readonly property var allDpiPresets: [400, 800, 1000, 1600, 2400, 4000, 6000, 8000, 12000, 16000, 32000, 44000]
     readonly property var dpiPresets: {
         var presets = []
         for (var i = 0; i < allDpiPresets.length; i++) {
