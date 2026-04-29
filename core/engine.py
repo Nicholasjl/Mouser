@@ -45,6 +45,7 @@ class Engine:
         self._status_cb = None             # UI callback for status messages
         self._battery_read_cb = None        # UI callback for battery level
         self._dpi_read_cb = None            # UI callback for current DPI
+        self._report_rate_read_cb = None    # UI callback for current report rate
         self._smart_shift_read_cb = None   # UI callback for Smart Shift mode
         self._debug_cb = None               # UI callback for debug messages
         self._gesture_event_cb = None       # UI callback for structured gesture events
@@ -490,8 +491,10 @@ class Engine:
 
         replay_ok = True
         retry_dpi = False
+        retry_report_rate = False
         retry_smart_shift = False
         saved_dpi = self.cfg.get("settings", {}).get("dpi")
+        saved_report_rate = self.cfg.get("settings", {}).get("report_rate")
 
         saved_ss_state = self._saved_smart_shift_state()
         saved_ss = saved_ss_state["mode"]
@@ -542,6 +545,19 @@ class Engine:
                 replay_ok = False
                 retry_dpi = True
 
+        if saved_report_rate:
+            if not hasattr(hg, "set_report_rate"):
+                replay_ok = False
+            elif hg.set_report_rate(saved_report_rate):
+                if self._report_rate_read_cb:
+                    try:
+                        self._report_rate_read_cb(saved_report_rate)
+                    except Exception:
+                        pass
+            else:
+                replay_ok = False
+                retry_report_rate = True
+
         if saved_ss and getattr(hg, "smart_shift_supported", False):
             if not hasattr(hg, "set_smart_shift"):
                 replay_ok = False
@@ -555,7 +571,7 @@ class Engine:
                 replay_ok = False
                 retry_smart_shift = True
 
-        if retry_dpi or retry_smart_shift:
+        if retry_dpi or retry_report_rate or retry_smart_shift:
             time.sleep(5)
             hg = self.hook._hid_gesture
             if hg is None or getattr(hg, "connected_device", None) is None:
@@ -574,6 +590,17 @@ class Engine:
                 elif self._dpi_read_cb:
                     try:
                         self._dpi_read_cb(saved_dpi)
+                    except Exception:
+                        pass
+            if retry_report_rate:
+                retry_ok = hasattr(hg, "set_report_rate") and hg.set_report_rate(
+                    saved_report_rate
+                )
+                if not retry_ok:
+                    replay_ok = False
+                elif self._report_rate_read_cb:
+                    try:
+                        self._report_rate_read_cb(saved_report_rate)
                     except Exception:
                         pass
             if retry_smart_shift and getattr(hg, "smart_shift_supported", False):
@@ -745,6 +772,20 @@ class Engine:
         print("[Engine] No HID++ connection — DPI not applied")
         return False
 
+    def set_report_rate(self, rate_hz):
+        """Send report-rate change to the mouse via HID++."""
+        try:
+            rate = int(rate_hz)
+        except (TypeError, ValueError):
+            rate = 1000
+        self.cfg.setdefault("settings", {})["report_rate"] = rate
+        save_config(self.cfg)
+        hg = self.hook._hid_gesture
+        if hg and hasattr(hg, "set_report_rate"):
+            return hg.set_report_rate(rate)
+        print("[Engine] No HID++ connection - report rate not applied")
+        return False
+
     def set_smart_shift(self, mode, smart_shift_enabled=False, threshold=25):
         """Send Smart Shift settings to device.
         mode: 'ratchet' or 'freespin' (fixed mode when smart_shift_enabled=False)
@@ -768,6 +809,16 @@ class Engine:
     def smart_shift_supported(self):
         hg = self.hook._hid_gesture
         return hg.smart_shift_supported if hg else False
+
+    @property
+    def report_rate_supported(self):
+        hg = self.hook._hid_gesture
+        return bool(getattr(hg, "report_rate_supported", False)) if hg else False
+
+    @property
+    def report_rate_options(self):
+        hg = self.hook._hid_gesture
+        return list(getattr(hg, "report_rate_options", []) or []) if hg else []
 
     def reload_mappings(self):
         """
@@ -799,6 +850,10 @@ class Engine:
     def set_dpi_read_callback(self, cb):
         """Register a callback ``cb(dpi_value)`` invoked when DPI is read from device."""
         self._dpi_read_cb = cb
+
+    def set_report_rate_read_callback(self, cb):
+        """Register a callback ``cb(rate_hz)`` invoked when report rate is read."""
+        self._report_rate_read_cb = cb
 
     def set_smart_shift_read_callback(self, cb):
         """Register a callback ``cb(state)`` invoked when Smart Shift is read."""

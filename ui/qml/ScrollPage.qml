@@ -254,6 +254,105 @@ Item {
                 }
             }
 
+            Item { width: 1; height: 16; visible: backend.reportRateSupported }
+
+            // Report Rate
+            Rectangle {
+                id: reportRateCard
+                visible: backend.reportRateSupported
+                width: parent.width - 72
+                anchors.horizontalCenter: parent.horizontalCenter
+                height: reportRateContent.implicitHeight + 40
+                radius: Theme.radius
+                color: scrollPage.theme.bgCard
+                border.width: 1
+                border.color: scrollPage.theme.border
+
+                Column {
+                    id: reportRateContent
+                    anchors {
+                        left: parent.left
+                        right: parent.right
+                        top: parent.top
+                        margins: 20
+                    }
+                    spacing: 12
+
+                    Text {
+                        text: s["scroll.report_rate"]
+                        font {
+                            family: uiState.fontFamily
+                            pixelSize: 16
+                            bold: true
+                        }
+                        color: scrollPage.theme.textPrimary
+                    }
+
+                    Text {
+                        text: s["scroll.report_rate_desc"]
+                        font {
+                            family: uiState.fontFamily
+                            pixelSize: 12
+                        }
+                        color: scrollPage.theme.textSecondary
+                        wrapMode: Text.WordWrap
+                        width: parent.width
+                    }
+
+                    Flow {
+                        width: parent.width
+                        spacing: 8
+
+                        Repeater {
+                            model: backend.reportRateOptions
+
+                            delegate: Rectangle {
+                                required property int modelData
+                                width: Math.max(84, reportRateText.implicitWidth + 24)
+                                height: 34
+                                radius: 8
+                                color: backend.reportRate === modelData
+                                       ? scrollPage.theme.accent
+                                       : reportRateMouse.containsMouse
+                                         ? scrollPage.theme.bgCardHover
+                                         : scrollPage.theme.bgSubtle
+                                border.width: 1
+                                border.color: backend.reportRate === modelData
+                                              ? scrollPage.theme.accent
+                                              : scrollPage.theme.border
+
+                                Accessible.role: Accessible.Button
+                                Accessible.name: modelData + " Hz"
+
+                                Behavior on color { ColorAnimation { duration: 120 } }
+
+                                Text {
+                                    id: reportRateText
+                                    anchors.centerIn: parent
+                                    text: modelData + " Hz"
+                                    font {
+                                        family: uiState.fontFamily
+                                        pixelSize: 12
+                                        bold: backend.reportRate === modelData
+                                    }
+                                    color: backend.reportRate === modelData
+                                           ? scrollPage.theme.bgSidebar
+                                           : scrollPage.theme.textPrimary
+                                }
+
+                                MouseArea {
+                                    id: reportRateMouse
+                                    anchors.fill: parent
+                                    hoverEnabled: true
+                                    cursorShape: Qt.PointingHandCursor
+                                    onClicked: backend.setReportRate(modelData)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
             Item { width: 1; height: 16; visible: backend.smartShiftSupported && backend.deviceHasSmartShift }
 
             // ── Scroll Wheel Mode ─────────────────────────────────

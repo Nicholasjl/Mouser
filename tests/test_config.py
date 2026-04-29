@@ -36,6 +36,7 @@ class ConfigMigrationTests(unittest.TestCase):
         self.assertFalse(migrated["settings"]["invert_hscroll"])
         self.assertFalse(migrated["settings"]["invert_vscroll"])
         self.assertEqual(migrated["settings"]["dpi"], 1000)
+        self.assertEqual(migrated["settings"]["report_rate"], 1000)
         self.assertEqual(migrated["settings"]["gesture_threshold"], 50)
         self.assertEqual(migrated["settings"]["gesture_deadzone"], 40)
         self.assertEqual(migrated["settings"]["gesture_timeout_ms"], 3000)
@@ -116,6 +117,7 @@ class ConfigMigrationTests(unittest.TestCase):
 
         self.assertEqual(loaded["version"], 9)
         self.assertEqual(loaded["settings"]["dpi"], 800)
+        self.assertEqual(loaded["settings"]["report_rate"], 1000)
         self.assertFalse(loaded["settings"]["start_at_login"])
         self.assertEqual(loaded["settings"]["gesture_threshold"], 50)
         self.assertEqual(loaded["settings"]["appearance_mode"], "system")
@@ -127,7 +129,50 @@ class ConfigMigrationTests(unittest.TestCase):
             loaded["profiles"]["default"]["mappings"]["xbutton1"], "alt_tab"
         )
         self.assertEqual(
+            loaded["profiles"]["default"]["mappings"]["dpi_switch"], "cycle_dpi"
+        )
+        self.assertEqual(
             loaded["profiles"]["default"]["mappings"]["gesture_left"], "none"
+        )
+
+    def test_load_config_accepts_utf8_bom(self):
+        partial = {
+            "version": 9,
+            "active_profile": "default",
+            "profiles": {
+                "default": {
+                    "label": "Default",
+                    "apps": [],
+                    "mappings": {
+                        "middle": "none",
+                        "xbutton3": "prev_tab",
+                        "xbutton4": "next_tab",
+                    },
+                }
+            },
+            "settings": {
+                "dpi": 44000,
+                "report_rate": 8000,
+            },
+        }
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_file = Path(temp_dir) / "config.json"
+            config_file.write_text(
+                json.dumps(partial),
+                encoding="utf-8-sig",
+            )
+
+            with (
+                patch.object(config, "CONFIG_DIR", temp_dir),
+                patch.object(config, "CONFIG_FILE", str(config_file)),
+            ):
+                loaded = config.load_config()
+
+        self.assertEqual(loaded["settings"]["report_rate"], 8000)
+        self.assertEqual(
+            loaded["profiles"]["default"]["mappings"]["xbutton3"],
+            "prev_tab",
         )
 
     def test_migrate_renames_start_with_windows_to_start_at_login(self):

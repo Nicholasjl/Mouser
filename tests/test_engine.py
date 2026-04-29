@@ -218,6 +218,7 @@ class EngineHorizontalScrollTests(unittest.TestCase):
         engine.hook._hid_gesture = SimpleNamespace(
             connected_device=SimpleNamespace(name="MX Master 3S"),
             set_dpi=Mock(return_value=True),
+            set_report_rate=Mock(return_value=True),
             read_dpi=Mock(),
             smart_shift_supported=False,
         )
@@ -264,11 +265,19 @@ class EngineReplayPhaseOneTests(unittest.TestCase):
     def _non_battery_threads(instances):
         return [thread for thread in instances if thread.name != "BatteryPoll"]
 
-    def _make_hid(self, *, connected_device=None, dpi_result=True, smart_shift_result=True):
+    def _make_hid(
+        self,
+        *,
+        connected_device=None,
+        dpi_result=True,
+        report_rate_result=True,
+        smart_shift_result=True,
+    ):
         return SimpleNamespace(
             connected_device=connected_device,
             read_battery=Mock(return_value=None),
             set_dpi=Mock(return_value=dpi_result),
+            set_report_rate=Mock(return_value=report_rate_result),
             set_smart_shift=Mock(return_value=smart_shift_result),
             smart_shift_supported=True,
         )
@@ -283,6 +292,7 @@ class EngineReplayPhaseOneTests(unittest.TestCase):
             self.assertEqual(len(threads), 1)
             self.assertEqual(self._non_battery_threads(threads), [])
             engine.hook._hid_gesture.set_dpi.assert_not_called()
+            engine.hook._hid_gesture.set_report_rate.assert_not_called()
             engine.hook._hid_gesture.set_smart_shift.assert_not_called()
 
             engine.hook._hid_gesture.connected_device = SimpleNamespace(name="MX Master 3S")
@@ -296,6 +306,9 @@ class EngineReplayPhaseOneTests(unittest.TestCase):
         self.assertEqual(len(replay_threads), 1)
         replay_threads[0].run_target()
         engine.hook._hid_gesture.set_dpi.assert_called_once_with(expected_dpi)
+        engine.hook._hid_gesture.set_report_rate.assert_called_once_with(
+            engine.cfg["settings"]["report_rate"]
+        )
         self.assertEqual(engine.hook._hid_gesture.set_smart_shift.call_count, 2)
         engine.hook._hid_gesture.set_smart_shift.assert_called_with(
             expected_ss_mode, expected_ss_enabled, expected_ss_threshold
@@ -306,8 +319,10 @@ class EngineReplayPhaseOneTests(unittest.TestCase):
         engine.hook._hid_gesture = self._make_hid(connected_device=None)
         threads = []
         seen_dpi = []
+        seen_report_rate = []
         seen_smart_shift = []
         engine.set_dpi_read_callback(seen_dpi.append)
+        engine.set_report_rate_read_callback(seen_report_rate.append)
         engine.set_smart_shift_read_callback(seen_smart_shift.append)
 
         with patch("core.engine.threading.Thread", side_effect=self._thread_factory(threads)):
@@ -320,6 +335,7 @@ class EngineReplayPhaseOneTests(unittest.TestCase):
         replay_threads[0].run_target()
 
         self.assertEqual(seen_dpi, [engine.cfg["settings"]["dpi"]])
+        self.assertEqual(seen_report_rate, [engine.cfg["settings"]["report_rate"]])
         self.assertGreaterEqual(len(seen_smart_shift), 2)
         self.assertEqual(
             seen_smart_shift[-1],
@@ -370,6 +386,7 @@ class EngineReplayPhaseOneTests(unittest.TestCase):
             connected_device=SimpleNamespace(name="G PRO 2 LIGHTSPEED"),
             set_dpi=Mock(return_value=True),
             set_dpi_preset_index=Mock(return_value=True),
+            set_report_rate=Mock(return_value=True),
             set_smart_shift=Mock(return_value=True),
             smart_shift_supported=False,
         )
@@ -381,6 +398,9 @@ class EngineReplayPhaseOneTests(unittest.TestCase):
             44000, presets, 1
         )
         engine.hook._hid_gesture.set_dpi.assert_not_called()
+        engine.hook._hid_gesture.set_report_rate.assert_called_once_with(
+            engine.cfg["settings"]["report_rate"]
+        )
 
     def test_evdev_only_connected_true_does_not_request_replay_worker(self):
         engine = self._make_engine()
@@ -395,6 +415,7 @@ class EngineReplayPhaseOneTests(unittest.TestCase):
         self.assertEqual(len(threads), 1)
         self.assertEqual(self._non_battery_threads(threads), [])
         engine.hook._hid_gesture.set_dpi.assert_not_called()
+        engine.hook._hid_gesture.set_report_rate.assert_not_called()
         engine.hook._hid_gesture.set_smart_shift.assert_not_called()
 
     def test_duplicate_same_value_refresh_does_not_create_duplicate_replay_workers(self):

@@ -141,6 +141,7 @@ class Backend(QObject):
     activeProfileChanged = Signal()
     statusMessage = Signal(str)
     dpiFromDevice = Signal(int)
+    reportRateFromDevice = Signal(int)
     smartShiftChanged = Signal()
     mouseConnectedChanged = Signal()
     hidFeaturesReadyChanged = Signal()
@@ -156,6 +157,7 @@ class Backend(QObject):
     # Internal cross-thread signals
     _profileSwitchRequest = Signal(str)
     _dpiReadRequest = Signal(int)
+    _reportRateReadRequest = Signal(int)
     _connectionChangeRequest = Signal(bool)
     _batteryChangeRequest = Signal(int)
     _debugMessageRequest = Signal(str)
@@ -175,6 +177,7 @@ class Backend(QObject):
         self._device_layout = get_device_layout("generic_mouse")
         self._device_dpi_min = DEFAULT_DPI_MIN
         self._device_dpi_max = DEFAULT_DPI_MAX
+        self._device_report_rate_options = []
         self._connected_device_source = ""
         self._connected_device_transport = ""
         self._battery_level = -1
@@ -202,6 +205,8 @@ class Backend(QObject):
             self._handleProfileSwitch, Qt.QueuedConnection)
         self._dpiReadRequest.connect(
             self._handleDpiRead, Qt.QueuedConnection)
+        self._reportRateReadRequest.connect(
+            self._handleReportRateRead, Qt.QueuedConnection)
         self._connectionChangeRequest.connect(
             self._handleConnectionChange, Qt.QueuedConnection)
         self._batteryChangeRequest.connect(
@@ -219,6 +224,8 @@ class Backend(QObject):
         if engine:
             engine.set_profile_change_callback(self._onEngineProfileSwitch)
             engine.set_dpi_read_callback(self._onEngineDpiRead)
+            if hasattr(engine, "set_report_rate_read_callback"):
+                engine.set_report_rate_read_callback(self._onEngineReportRateRead)
             engine.set_connection_change_callback(self._onEngineConnectionChange)
             if hasattr(engine, "set_battery_callback"):
                 engine.set_battery_callback(self._onEngineBatteryRead)
@@ -338,6 +345,22 @@ class Backend(QObject):
         return self._cfg.get("settings", {}).get(
             "dpi_presets", list(self._DEFAULT_DPI_PRESETS)
         )
+
+    @Property(int, notify=settingsChanged)
+    def reportRate(self):
+        return int(self._cfg.get("settings", {}).get("report_rate", 1000))
+
+    @Property(bool, notify=deviceInfoChanged)
+    def reportRateSupported(self):
+        if self._device_report_rate_options:
+            return True
+        return bool(getattr(self._engine, "report_rate_supported", False)) if self._engine else False
+
+    @Property(list, notify=deviceInfoChanged)
+    def reportRateOptions(self):
+        if self._device_report_rate_options:
+            return list(self._device_report_rate_options)
+        return [125, 250, 500, 1000] if self.reportRateSupported else []
 
     @Slot(int, int)
     def setDpiPreset(self, index, value):
@@ -692,6 +715,21 @@ class Backend(QObject):
             self._engine.set_dpi(dpi)
         self.settingsChanged.emit()
 
+    @Slot(int)
+    def setReportRate(self, value):
+        options = self.reportRateOptions
+        try:
+            rate = int(value)
+        except (TypeError, ValueError):
+            rate = 1000
+        if options and rate not in options:
+            rate = min(options, key=lambda item: (abs(item - rate), item))
+        self._cfg.setdefault("settings", {})["report_rate"] = rate
+        save_config(self._cfg)
+        if self._engine and hasattr(self._engine, "set_report_rate"):
+            self._engine.set_report_rate(rate)
+        self.settingsChanged.emit()
+
     def _applySmartShift(self, mode=None, enabled=None, threshold=None):
         """Update one or more SmartShift settings, persist config, and push to device."""
         settings = self._cfg.setdefault("settings", {})
@@ -971,6 +1009,10 @@ class Backend(QObject):
         """Called from engine thread — posts to Qt main thread."""
         self._dpiReadRequest.emit(dpi)
 
+    def _onEngineReportRateRead(self, rate_hz):
+        """Called from engine thread; posts to Qt main thread."""
+        self._reportRateReadRequest.emit(rate_hz)
+
     def _onEngineConnectionChange(self, connected):
         """Called from engine/hook thread — posts to Qt main thread."""
         self._connectionChangeRequest.emit(connected)
@@ -1048,6 +1090,13 @@ class Backend(QObject):
         self._cfg.setdefault("settings", {})["dpi"] = dpi
         self.settingsChanged.emit()
         self.dpiFromDevice.emit(dpi)
+
+    @Slot(int)
+    def _handleReportRateRead(self, rate_hz):
+        """Runs on Qt main thread."""
+        self._cfg.setdefault("settings", {})["report_rate"] = int(rate_hz)
+        self.settingsChanged.emit()
+        self.reportRateFromDevice.emit(int(rate_hz))
 
     @Slot(bool)
     def _handleConnectionChange(self, connected):
@@ -1165,6 +1214,14 @@ class Backend(QObject):
         if dpi_max != self._device_dpi_max:
             self._device_dpi_max = dpi_max
             info_changed = True
+        report_options = []
+        if self._engine:
+            report_options = list(
+                getattr(self._engine, "report_rate_options", []) or []
+            )
+        if report_options != self._device_report_rate_options:
+            self._device_report_rate_options = report_options
+            info_changed = True
         if info_changed:
             self.deviceInfoChanged.emit()
 
@@ -1177,6 +1234,18 @@ class Backend(QObject):
                 if self._engine:
                     self._engine.set_dpi(clamped_dpi)
                 self.settingsChanged.emit()
+
+        options = self._device_report_rate_options
+        current_rate = self._cfg.get("settings", {}).get("report_rate", 1000)
+        if options and current_rate not in options:
+            normalized_rate = min(
+                options, key=lambda item: (abs(item - current_rate), item)
+            )
+            self._cfg.setdefault("settings", {})["report_rate"] = normalized_rate
+            save_config(self._cfg)
+            if self._engine and hasattr(self._engine, "set_report_rate"):
+                self._engine.set_report_rate(normalized_rate)
+            self.settingsChanged.emit()
 
         overrides = self._cfg.get("settings", {}).get("device_layout_overrides", {})
         valid_override_keys = {choice["key"] for choice in get_manual_layout_choices()}

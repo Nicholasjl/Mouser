@@ -88,6 +88,7 @@ DEFAULT_CONFIG = {
                 "xbutton2": "alt_tab",
                 "xbutton3": "none",
                 "xbutton4": "none",
+                "dpi_switch": "cycle_dpi",
                 "hscroll_left": "browser_back",
                 "hscroll_right": "browser_forward",
                 "mode_shift": "switch_scroll_mode",
@@ -101,6 +102,7 @@ DEFAULT_CONFIG = {
         "invert_hscroll": False,  # swap horizontal scroll directions
         "invert_vscroll": False,  # swap vertical scroll directions
         "dpi": 1000,              # pointer speed / DPI setting
+        "report_rate": 1000,      # movement report rate in Hz
         "smart_shift_mode": "ratchet",
         "smart_shift_enabled": False,
         "smart_shift_threshold": 25,
@@ -165,7 +167,7 @@ def load_config():
     ensure_config_dir()
     if os.path.exists(CONFIG_FILE):
         try:
-            with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+            with open(CONFIG_FILE, "r", encoding="utf-8-sig") as f:
                 cfg = json.load(f)
             # Merge any missing keys from default
             cfg = _migrate(cfg)
@@ -339,6 +341,7 @@ def _migrate(cfg):
     cfg["settings"].setdefault("device_layout_overrides", {})
     cfg["settings"].setdefault("language", "en")
     cfg["settings"].setdefault("ignore_trackpad", True)
+    cfg["settings"].setdefault("report_rate", 1000)
 
     # Always migrate old wmplayer.exe → Microsoft.Media.Player.exe in profile apps
     for pdata in cfg.get("profiles", {}).values():

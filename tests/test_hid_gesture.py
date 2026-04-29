@@ -322,6 +322,40 @@ class HidOnboardProfileModeTests(unittest.TestCase):
         )
         self.assertEqual(hid_gesture._read_g_pro_2_profile_dpi(profile), 44000)
 
+    def test_g_pro_2_mouser_profile_patches_report_rate_without_buttons(self):
+        base = bytearray([0xFF] * 255)
+        profile = hid_gesture._build_g_pro_2_mouser_profile(
+            bytes(base),
+            255,
+            report_rate_code=3,
+        )
+
+        self.assertEqual(profile[0], 3)
+        self.assertEqual(
+            hid_gesture._read_g_pro_2_profile_report_rate(
+                profile, extended=True
+            ),
+            1000,
+        )
+        self.assertEqual(profile[0x44:0x48], b"\x80\x03\x00\xFD")
+        self.assertEqual(profile[0x48:0x4C], b"\x80\x03\x03\xF1")
+        self.assertEqual(profile[0x4C:0x50], b"\x80\x03\x03\xF2")
+        self.assertEqual(
+            profile[-2:],
+            hid_gesture._crc16(profile[:-2]).to_bytes(2, "big"),
+        )
+
+    def test_read_g_pro_2_profile_report_rate_supports_extended_codes(self):
+        profile = bytearray([0xFF] * 255)
+        profile[0] = 6
+
+        self.assertEqual(
+            hid_gesture._read_g_pro_2_profile_report_rate(
+                profile, extended=True
+            ),
+            8000,
+        )
+
     def test_read_g_pro_2_profile_dpi_uses_default_slot(self):
         profile = bytearray([0xFF] * 255)
         profile[0x01] = 2
@@ -435,6 +469,58 @@ class HidOnboardProfileModeTests(unittest.TestCase):
             active_index=1,
         )
         dpi_index_mock.assert_called_once_with(1)
+
+    def test_g_pro_2_onboard_report_rate_writes_profile_byte(self):
+        listener = hid_gesture.HidGestureListener()
+        listener._connected_device_info = SimpleNamespace(key="g_pro_2_lightspeed")
+        listener._report_rate_extended = True
+
+        with patch.object(
+            listener, "_write_g_pro_2_mouser_profile", return_value=True
+        ) as write_mock:
+            self.assertTrue(listener._set_g_pro_2_onboard_report_rate(8000))
+
+        write_mock.assert_called_once_with(
+            listener._connected_device_info,
+            report_rate_code=6,
+        )
+
+    def test_g_pro_2_report_rate_failure_does_not_use_direct_fallback(self):
+        listener = hid_gesture.HidGestureListener()
+        listener._connected_device_info = SimpleNamespace(key="g_pro_2_lightspeed")
+        listener._report_rate_idx = 0x0E
+        listener._report_rate_extended = True
+        listener._report_rate_options = (125, 250, 500, 1000, 2000, 4000, 8000)
+        listener._dev = object()
+        listener._pending_report_rate = 8000
+
+        with (
+            patch.object(
+                listener, "_set_g_pro_2_onboard_report_rate", return_value=False
+            ),
+            patch.object(listener, "_set_direct_report_rate") as direct_mock,
+        ):
+            listener._apply_pending_report_rate()
+
+        direct_mock.assert_not_called()
+        self.assertFalse(listener._report_rate_result)
+        self.assertIsNone(listener._pending_report_rate)
+
+    def test_extended_report_rate_options_parse_capability_mask(self):
+        listener = hid_gesture.HidGestureListener()
+        listener._dev = object()
+        listener._report_rate_idx = 0x0E
+        listener._report_rate_extended = True
+
+        with patch.object(
+            listener,
+            "_request",
+            return_value=(1, 0x0E, 1, 0x0A, [0x00, 0x7F]),
+        ):
+            self.assertEqual(
+                listener._read_report_rate_options(),
+                [125, 250, 500, 1000, 2000, 4000, 8000],
+            )
 
     def test_g_pro_2_preset_command_failure_does_not_use_full_write_fallback(self):
         listener = hid_gesture.HidGestureListener()

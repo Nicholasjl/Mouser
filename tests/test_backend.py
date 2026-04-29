@@ -30,25 +30,34 @@ class _FakeEngine:
         connected_device=None,
         hid_features_ready=False,
         smart_shift_supported=False,
+        report_rate_supported=False,
+        report_rate_options=None,
     ):
         self.device_connected = device_connected
         self.connected_device = connected_device
         self.hid_features_ready = hid_features_ready
         self.smart_shift_supported = smart_shift_supported
+        self.report_rate_supported = report_rate_supported
+        self.report_rate_options = list(report_rate_options or [])
         self.profile_callback = None
         self.dpi_callback = None
+        self.report_rate_callback = None
         self.connection_callback = None
         self.battery_callback = None
         self.debug_callback = None
         self.gesture_callback = None
         self.status_callback = None
         self.debug_enabled = None
+        self.report_rate_calls = []
 
     def set_profile_change_callback(self, cb):
         self.profile_callback = cb
 
     def set_dpi_read_callback(self, cb):
         self.dpi_callback = cb
+
+    def set_report_rate_read_callback(self, cb):
+        self.report_rate_callback = cb
 
     def set_connection_change_callback(self, cb):
         self.connection_callback = cb
@@ -67,6 +76,10 @@ class _FakeEngine:
 
     def set_debug_enabled(self, enabled):
         self.debug_enabled = enabled
+
+    def set_report_rate(self, rate_hz):
+        self.report_rate_calls.append(rate_hz)
+        return True
 
 
 @unittest.skipIf(Backend is None, "PySide6 not installed in test environment")
@@ -193,6 +206,54 @@ class BackendDeviceLayoutTests(unittest.TestCase):
         self.assertIsNotNone(engine.status_callback)
         self.assertIs(engine.status_callback.__self__, backend)
         self.assertIs(engine.status_callback.__func__, Backend._onEngineStatusMessage)
+
+    def test_init_wires_engine_report_rate_callback_into_backend(self):
+        engine = _FakeEngine()
+
+        backend = self._make_backend(engine=engine)
+
+        self.assertIsNotNone(engine.report_rate_callback)
+        self.assertIs(engine.report_rate_callback.__self__, backend)
+        self.assertIs(
+            engine.report_rate_callback.__func__,
+            Backend._onEngineReportRateRead,
+        )
+
+    def test_report_rate_options_follow_connected_device_capabilities(self):
+        device = SimpleNamespace(
+            key="g_pro_2_lightspeed",
+            display_name="G PRO 2 LIGHTSPEED",
+            dpi_min=100,
+            dpi_max=44000,
+            ui_layout="g_pro_2_lightspeed",
+        )
+        engine = _FakeEngine(
+            device_connected=True,
+            connected_device=device,
+            report_rate_supported=True,
+            report_rate_options=[125, 250, 500, 1000, 2000, 4000, 8000],
+        )
+
+        backend = self._make_backend(engine=engine)
+
+        self.assertTrue(backend.reportRateSupported)
+        self.assertEqual(
+            backend.reportRateOptions,
+            [125, 250, 500, 1000, 2000, 4000, 8000],
+        )
+
+    def test_set_report_rate_clamps_to_supported_option_and_applies(self):
+        engine = _FakeEngine(
+            report_rate_supported=True,
+            report_rate_options=[125, 250, 500, 1000, 2000, 4000, 8000],
+        )
+        backend = self._make_backend(engine=engine)
+        backend._device_report_rate_options = list(engine.report_rate_options)
+
+        backend.setReportRate(7000)
+
+        self.assertEqual(backend.reportRate, 8000)
+        self.assertEqual(engine.report_rate_calls, [8000])
 
     def test_replay_failure_status_becomes_backend_status_message(self):
         app = _ensure_qapp()

@@ -27,6 +27,11 @@ class LocaleManagerButtonTranslationTests(unittest.TestCase):
 
         self.assertEqual(lm.trButton("Right-front"), "Right-front")
 
+    def test_report_rate_scroll_copy_is_translated(self):
+        self.assertEqual(LocaleManager("en").tr("scroll.report_rate"), "Report Rate")
+        self.assertEqual(LocaleManager("zh_CN").tr("scroll.report_rate"), "\u91c7\u6837\u7387")
+        self.assertEqual(LocaleManager("zh_TW").tr("scroll.report_rate"), "\u56de\u5831\u7387")
+
 
 if __name__ == "__main__":
     unittest.main()

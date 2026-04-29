@@ -490,6 +490,8 @@ FEAT_SMART_SHIFT_ENHANCED = 0x2111  # Smart Shift Enhanced (MX Master 3/3S, MX M
 FEAT_UNIFIED_BATT   = 0x1004      # Unified Battery (preferred)
 FEAT_DEVICE_NAME    = 0x0005      # Device Name & Type
 FEAT_BATTERY_STATUS = 0x1000      # Battery Status (fallback)
+FEAT_REPORT_RATE = 0x8060         # Gaming report rate (1-8 ms)
+FEAT_EXT_REPORT_RATE = 0x8061     # Gaming extended report rate (125-8000 Hz)
 FEAT_ONBOARD_PROFILES = 0x8100    # Gaming onboard profile mode
 FEAT_MOUSE_BUTTON_SPY = 0x8110    # Gaming mouse physical button bitmask reports
 DEFAULT_GESTURE_CID = DEFAULT_GESTURE_CIDS[0]
@@ -499,6 +501,7 @@ G_PRO_2_ROM_PROFILE_SECTOR = 0x0101
 G_PRO_2_ROM_CONTROL_SECTOR = 0x0100
 ONBOARD_PROFILE_MODE_ENABLED = 0x01
 ONBOARD_PROFILE_MODE_SOFTWARE = 0x02
+G_PRO_2_PROFILE_REPORT_RATE_OFFSET = 0x00
 G_PRO_2_PROFILE_DPI_DEFAULT_INDEX_OFFSET = 0x01
 G_PRO_2_PROFILE_DPI_SHIFT_INDEX_OFFSET = 0x02
 G_PRO_2_PROFILE_DPI_HEADER_OFFSET = 0x03
@@ -516,6 +519,25 @@ G_PRO_2_MOUSER_BUTTON_MAPPINGS = (
     (0x48, 0x03, G_PRO_2_MOUSER_CONSUMER_USAGES["right_back"], "right_back"),
     (0x4C, 0x03, G_PRO_2_MOUSER_CONSUMER_USAGES["right_front"], "right_front"),
 )
+
+STANDARD_REPORT_RATE_MS_TO_HZ = {
+    ms: int(round(1000 / ms)) for ms in range(1, 9)
+}
+STANDARD_REPORT_RATE_HZ_TO_MS = {
+    hz: ms for ms, hz in STANDARD_REPORT_RATE_MS_TO_HZ.items()
+}
+EXT_REPORT_RATE_CODE_TO_HZ = {
+    0: 125,
+    1: 250,
+    2: 500,
+    3: 1000,
+    4: 2000,
+    5: 4000,
+    6: 8000,
+}
+EXT_REPORT_RATE_HZ_TO_CODE = {
+    hz: code for code, hz in EXT_REPORT_RATE_CODE_TO_HZ.items()
+}
 
 # Centurion protocol constants (Lightspeed PRO-series receivers)
 CENTURION_REPORT_ID = 0x51
@@ -737,6 +759,74 @@ def _normalize_g_pro_2_dpi_slots(dpi_values, current_dpi=None):
     return slots[:G_PRO_2_PROFILE_DPI_SLOTS]
 
 
+def _normalize_report_rate_hz(rate_hz, options=None):
+    try:
+        rate = int(rate_hz)
+    except (TypeError, ValueError):
+        rate = 1000
+    choices = []
+    for value in options or ():
+        try:
+            normalized = int(value)
+        except (TypeError, ValueError):
+            continue
+        if normalized > 0:
+            choices.append(normalized)
+    choices = sorted(set(choices))
+    if not choices:
+        choices = [125, 250, 500, 1000]
+    if rate in choices:
+        return rate
+    return min(choices, key=lambda value: (abs(value - rate), value))
+
+
+def _standard_report_rate_code_to_hz(code):
+    try:
+        ms = int(code)
+    except (TypeError, ValueError):
+        return None
+    return STANDARD_REPORT_RATE_MS_TO_HZ.get(ms)
+
+
+def _standard_report_rate_hz_to_code(rate_hz):
+    rate = _normalize_report_rate_hz(rate_hz, STANDARD_REPORT_RATE_HZ_TO_MS.keys())
+    return STANDARD_REPORT_RATE_HZ_TO_MS.get(rate)
+
+
+def _extended_report_rate_code_to_hz(code):
+    try:
+        return EXT_REPORT_RATE_CODE_TO_HZ.get(int(code))
+    except (TypeError, ValueError):
+        return None
+
+
+def _extended_report_rate_hz_to_code(rate_hz):
+    rate = _normalize_report_rate_hz(rate_hz, EXT_REPORT_RATE_HZ_TO_CODE.keys())
+    return EXT_REPORT_RATE_HZ_TO_CODE.get(rate)
+
+
+def _read_g_pro_2_profile_report_rate(profile, extended=False):
+    if not profile or len(profile) <= G_PRO_2_PROFILE_REPORT_RATE_OFFSET:
+        return None
+    code = int(profile[G_PRO_2_PROFILE_REPORT_RATE_OFFSET])
+    if extended:
+        return _extended_report_rate_code_to_hz(code)
+    return _standard_report_rate_code_to_hz(code)
+
+
+def _patch_g_pro_2_profile_report_rate(body, report_rate_code):
+    if len(body) <= G_PRO_2_PROFILE_REPORT_RATE_OFFSET:
+        return False
+    try:
+        code = int(report_rate_code)
+    except (TypeError, ValueError):
+        return False
+    if not 0 <= code <= 0xFF:
+        return False
+    body[G_PRO_2_PROFILE_REPORT_RATE_OFFSET] = code & 0xFF
+    return True
+
+
 def _patch_g_pro_2_profile_dpi(body, dpi=None, dpi_slots=None, active_index=0):
     min_size = (
         G_PRO_2_PROFILE_DPI_RESOLUTIONS_OFFSET
@@ -781,11 +871,17 @@ def _patch_g_pro_2_profile_dpi(body, dpi=None, dpi_slots=None, active_index=0):
 
 
 def _build_g_pro_2_mouser_profile(
-    base_profile, size, dpi=None, dpi_slots=None, active_index=0
+    base_profile, size, dpi=None, dpi_slots=None, active_index=0,
+    report_rate_code=None
 ):
     if not base_profile or len(base_profile) < size:
         return None
     body = bytearray(base_profile[:max(0, size - 2)])
+    if (
+        report_rate_code is not None
+        and not _patch_g_pro_2_profile_report_rate(body, report_rate_code)
+    ):
+        return None
     if (dpi is not None or dpi_slots is not None) and not _patch_g_pro_2_profile_dpi(
         body, dpi=dpi, dpi_slots=dpi_slots, active_index=active_index
     ):
@@ -839,6 +935,12 @@ class HidGestureListener:
         self._dpi_call_lock = threading.Lock()
         self._smart_shift_idx = None      # feature index of SMART_SHIFT / SMART_SHIFT_ENHANCED
         self._smart_shift_enhanced = False  # True → use fn 1/2; False → fn 0/1
+        self._report_rate_idx = None
+        self._report_rate_extended = False
+        self._report_rate_options = ()
+        self._pending_report_rate = None
+        self._report_rate_result = None
+        self._report_rate_call_lock = threading.Lock()
         self._onboard_profiles_idx = None
         self._onboard_profiles_restore_mode = None
         self._mouse_button_spy_idx = None   # feature index of MOUSE_BUTTON_SPY
@@ -899,6 +1001,14 @@ class HidGestureListener:
     def mouse_button_spy_index(self):
         return self._mouse_button_spy_idx
 
+    @property
+    def report_rate_supported(self):
+        return self._report_rate_idx is not None
+
+    @property
+    def report_rate_options(self):
+        return list(self._report_rate_options)
+
     def dump_device_info(self):
         """Return a dict describing everything we know about the connected device.
 
@@ -932,6 +1042,13 @@ class HidGestureListener:
             features["MOUSE_BUTTON_SPY (0x8110)"] = (
                 f"index 0x{self._mouse_button_spy_idx:02X}"
             )
+        if self._report_rate_idx is not None:
+            feat_name = (
+                "EXTENDED_ADJUSTABLE_REPORT_RATE (0x8061)"
+                if self._report_rate_extended
+                else "REPORT_RATE (0x8060)"
+            )
+            features[feat_name] = f"index 0x{self._report_rate_idx:02X}"
         if self._onboard_profiles_idx is not None:
             features["ONBOARD_PROFILES (0x8100)"] = (
                 f"index 0x{self._onboard_profiles_idx:02X}"
@@ -958,6 +1075,7 @@ class HidGestureListener:
             "supported_buttons": list(dev.supported_buttons),
             "gesture_cids": [f"0x{c:04X}" for c in dev.gesture_cids],
             "dpi_range": [dev.dpi_min, dev.dpi_max],
+            "report_rate_options_hz": list(self._report_rate_options),
             "discovered_features": features,
             "reprog_controls": controls,
             "gesture_candidates": [f"0x{c:04X}" for c in self._gesture_candidates],
@@ -1773,8 +1891,76 @@ class HidGestureListener:
         print(f"[HidGesture] ONBOARD_PROFILES current DPI index {index} failed")
         return False
 
+    def _discover_report_rate_feature(self):
+        self._report_rate_idx = None
+        self._report_rate_extended = False
+        self._report_rate_options = ()
+
+        rr_fi = self._find_feature(FEAT_EXT_REPORT_RATE)
+        if rr_fi is not None:
+            self._report_rate_idx = rr_fi
+            self._report_rate_extended = True
+            self._report_rate_options = tuple(self._read_report_rate_options())
+            print(
+                "[HidGesture] Found EXT_REPORT_RATE "
+                f"@0x{rr_fi:02X} options={list(self._report_rate_options)}Hz"
+            )
+            return rr_fi
+
+        rr_fi = self._find_feature(FEAT_REPORT_RATE)
+        if rr_fi is not None:
+            self._report_rate_idx = rr_fi
+            self._report_rate_extended = False
+            self._report_rate_options = tuple(self._read_report_rate_options())
+            print(
+                "[HidGesture] Found REPORT_RATE "
+                f"@0x{rr_fi:02X} options={list(self._report_rate_options)}Hz"
+            )
+            return rr_fi
+        return None
+
+    def _read_report_rate_options(self):
+        if self._report_rate_idx is None or self._dev is None:
+            return []
+        if self._report_rate_extended:
+            resp = self._request(self._report_rate_idx, 1, [], timeout_ms=800)
+            if not resp:
+                return []
+            params = resp[4]
+            if len(params) >= 2:
+                flags = ((params[0] & 0xFF) << 8) | (params[1] & 0xFF)
+            elif params:
+                flags = params[0] & 0xFF
+            else:
+                flags = 0
+            return sorted(
+                hz for code, hz in EXT_REPORT_RATE_CODE_TO_HZ.items()
+                if flags & (1 << code)
+            )
+
+        resp = self._request(self._report_rate_idx, 0, [], timeout_ms=800)
+        if not resp:
+            return []
+        params = resp[4]
+        flags = params[0] & 0xFF if params else 0
+        return sorted(
+            hz for ms, hz in STANDARD_REPORT_RATE_MS_TO_HZ.items()
+            if flags & (1 << (ms - 1))
+        )
+
+    def _report_rate_code_for_hz(self, rate_hz):
+        if self._report_rate_extended:
+            return _extended_report_rate_hz_to_code(rate_hz)
+        return _standard_report_rate_hz_to_code(rate_hz)
+
+    def _report_rate_hz_for_code(self, code):
+        if self._report_rate_extended:
+            return _extended_report_rate_code_to_hz(code)
+        return _standard_report_rate_code_to_hz(code)
+
     def _write_g_pro_2_mouser_profile(
-        self, device_spec=None, dpi=None, dpi_slots=None, active_index=0
+        self, device_spec=None, dpi=None, dpi_slots=None, active_index=0,
+        report_rate_code=None
     ):
         if getattr(device_spec, "key", "") != "g_pro_2_lightspeed":
             return False
@@ -1802,7 +1988,19 @@ class HidGestureListener:
             G_PRO_2_MOUSER_PROFILE_SECTOR, size
         )
         if dpi is None and dpi_slots is None:
-            dpi = _read_g_pro_2_profile_dpi(current_profile)
+            if report_rate_code is not None:
+                current_slots = _read_g_pro_2_profile_dpi_slots(current_profile)
+                if any(slot for slot in current_slots):
+                    dpi_slots = current_slots
+                    current_index = current_profile[
+                        G_PRO_2_PROFILE_DPI_DEFAULT_INDEX_OFFSET
+                    ] if current_profile else 0
+                    if 0 <= current_index < G_PRO_2_PROFILE_DPI_SLOTS:
+                        active_index = current_index
+                else:
+                    dpi = _read_g_pro_2_profile_dpi(current_profile)
+            else:
+                dpi = _read_g_pro_2_profile_dpi(current_profile)
 
         base_profile = self._read_onboard_sector(G_PRO_2_ROM_PROFILE_SECTOR, size)
         if base_profile is None:
@@ -1815,6 +2013,7 @@ class HidGestureListener:
             dpi=dpi,
             dpi_slots=dpi_slots,
             active_index=active_index,
+            report_rate_code=report_rate_code,
         )
         if profile_payload is None:
             print("[HidGesture] G PRO 2 Mouser profile build failed")
@@ -1841,6 +2040,11 @@ class HidGestureListener:
             profile_payload
         )
         self._g_pro_2_cached_dpi_index = active_index
+        if report_rate_code is not None:
+            rate_hz = self._report_rate_hz_for_code(report_rate_code)
+            rate_note = f" report_rate={rate_hz}Hz" if rate_hz else ""
+        else:
+            rate_note = ""
         if dpi_slots is not None:
             dpi_note = (
                 f" profile_dpi_slots={self._g_pro_2_cached_dpi_slots} "
@@ -1851,7 +2055,7 @@ class HidGestureListener:
         print(
             "[HidGesture] G PRO 2 Mouser onboard profile active "
             "(dpi=consumer:0x00FD right_back=consumer:0x03F1 "
-            f"right_front=consumer:0x03F2{dpi_note})"
+            f"right_front=consumer:0x03F2{dpi_note}{rate_note})"
         )
         return True
 
@@ -1965,6 +2169,82 @@ class HidGestureListener:
         if dpi:
             print(f"[HidGesture] Current DPI = {dpi} (G PRO 2 onboard profile)")
         return dpi
+
+    def _set_g_pro_2_onboard_report_rate(self, rate_hz):
+        device_spec = self._connected_device_info
+        if getattr(device_spec, "key", "") != "g_pro_2_lightspeed":
+            return False
+        code = self._report_rate_code_for_hz(rate_hz)
+        if code is None:
+            return False
+        if not self._write_g_pro_2_mouser_profile(
+            device_spec, report_rate_code=code
+        ):
+            return False
+        print(
+            f"[HidGesture] Report rate set to {int(rate_hz)}Hz via "
+            "G PRO 2 onboard profile"
+        )
+        return True
+
+    def _read_g_pro_2_onboard_report_rate(self):
+        device_spec = self._connected_device_info
+        if getattr(device_spec, "key", "") != "g_pro_2_lightspeed":
+            return None
+        if self._dev is None:
+            return None
+        if self._onboard_profiles_idx is None:
+            self._onboard_profiles_idx = self._find_feature(FEAT_ONBOARD_PROFILES)
+        if self._onboard_profiles_idx is None:
+            return None
+        info = self._read_onboard_profile_info()
+        if not info:
+            return None
+        size = int(info.get("size") or 0)
+        if size <= 0:
+            return None
+        profile = self._read_onboard_sector(G_PRO_2_MOUSER_PROFILE_SECTOR, size)
+        rate = _read_g_pro_2_profile_report_rate(
+            profile, extended=self._report_rate_extended
+        )
+        if rate:
+            print(
+                f"[HidGesture] Current report rate = {rate}Hz "
+                "(G PRO 2 onboard profile)"
+            )
+        return rate
+
+    def _set_direct_report_rate(self, rate_hz):
+        if self._report_rate_idx is None or self._dev is None:
+            return False
+        code = self._report_rate_code_for_hz(rate_hz)
+        if code is None:
+            return False
+        func = 3 if self._report_rate_extended else 2
+        resp = self._request(
+            self._report_rate_idx, func, [code], timeout_ms=1200
+        )
+        if resp:
+            print(f"[HidGesture] Report rate set to {int(rate_hz)}Hz")
+            return True
+        print("[HidGesture] Report rate set FAILED")
+        return False
+
+    def _read_direct_report_rate(self):
+        if self._report_rate_idx is None or self._dev is None:
+            return None
+        func = 2 if self._report_rate_extended else 1
+        resp = self._request(self._report_rate_idx, func, [], timeout_ms=800)
+        if not resp:
+            print("[HidGesture] Report rate read FAILED")
+            return None
+        params = resp[4]
+        if not params:
+            return None
+        rate = self._report_rate_hz_for_code(params[0])
+        if rate:
+            print(f"[HidGesture] Current report rate = {rate}Hz")
+        return rate
 
     def _restore_onboard_profiles(self):
         if (
@@ -2133,6 +2413,67 @@ class HidGestureListener:
         return None
 
     # ── Smart Shift control ─────────────────────────────────────
+
+    # ── Report-rate control ───────────────────────────────────────
+
+    def set_report_rate(self, rate_hz):
+        """Queue a report-rate change in Hz."""
+        with self._report_rate_call_lock:
+            rate = _normalize_report_rate_hz(rate_hz, self._report_rate_options)
+            self._report_rate_result = None
+            self._pending_report_rate = rate
+            for _ in range(30):
+                if self._pending_report_rate is None:
+                    return self._report_rate_result is True
+                time.sleep(0.1)
+            print("[HidGesture] Report rate set timed out")
+            return False
+
+    def read_report_rate(self):
+        """Queue a report-rate read in Hz."""
+        with self._report_rate_call_lock:
+            self._report_rate_result = None
+            self._pending_report_rate = "read"
+            for _ in range(30):
+                if self._pending_report_rate is None:
+                    return self._report_rate_result
+                time.sleep(0.1)
+            print("[HidGesture] Report rate read timed out")
+            self._pending_report_rate = None
+            return None
+
+    def _apply_pending_report_rate(self):
+        pending = self._pending_report_rate
+        if pending is None:
+            return
+        if self._report_rate_idx is None or self._dev is None:
+            self._report_rate_result = False
+            self._pending_report_rate = None
+            return
+
+        rate = _normalize_report_rate_hz(pending, self._report_rate_options)
+        if self._set_g_pro_2_onboard_report_rate(rate):
+            self._report_rate_result = True
+            self._pending_report_rate = None
+            return
+        if getattr(self._connected_device_info, "key", "") == "g_pro_2_lightspeed":
+            print("[HidGesture] G PRO 2 report-rate profile write FAILED")
+            self._report_rate_result = False
+            self._pending_report_rate = None
+            return
+        self._report_rate_result = self._set_direct_report_rate(rate)
+        self._pending_report_rate = None
+
+    def _apply_pending_read_report_rate(self):
+        if self._report_rate_idx is None or self._dev is None:
+            self._report_rate_result = None
+            self._pending_report_rate = None
+            return
+        rate = self._read_g_pro_2_onboard_report_rate()
+        if rate is None:
+            rate = self._read_direct_report_rate()
+        self._report_rate_result = rate
+        self._pending_report_rate = None
 
     SMART_SHIFT_FREESPIN = 0x01
     SMART_SHIFT_RATCHET  = 0x02
@@ -2562,6 +2903,9 @@ class HidGestureListener:
             self._smart_shift_idx = None
             self._battery_idx = None
             self._battery_feature_id = None
+            self._report_rate_idx = None
+            self._report_rate_extended = False
+            self._report_rate_options = ()
             self._onboard_profiles_idx = None
             self._mouse_button_spy_idx = None
             self._gesture_cid = DEFAULT_GESTURE_CID
@@ -2697,6 +3041,8 @@ class HidGestureListener:
                         self._dpi_extended = True
                         print(f"[HidGesture] Found EXT_ADJ_DPI @0x{dpi_fi:02X} on Lightspeed device")
 
+                self._discover_report_rate_feature()
+
                 # Discover battery
                 batt_fi = self._find_feature(FEAT_UNIFIED_BATT)
                 if batt_fi:
@@ -2721,6 +3067,7 @@ class HidGestureListener:
                 has_useful_features = any([
                     self._feat_idx is not None,
                     self._dpi_idx is not None,
+                    self._report_rate_idx is not None,
                     self._battery_idx is not None,
                     self._mouse_button_spy_idx is not None,
                 ])
@@ -2799,6 +3146,7 @@ class HidGestureListener:
                                 self._dpi_idx = dpi_fi
                                 self._dpi_extended = True
                                 print(f"[HidGesture] Found EXTENDED_ADJUSTABLE_DPI @0x{dpi_fi:02X}")
+                        self._discover_report_rate_feature()
                         # Prefer 0x2111 (Enhanced) — used by MX Master 3/3S/4 and Logi Options+.
                         # Fall back to 0x2110 (basic) for older devices.
                         ss_fi = self._find_feature(FEAT_SMART_SHIFT_ENHANCED)
@@ -2906,6 +3254,11 @@ class HidGestureListener:
                             self._apply_pending_read_dpi()
                         else:
                             self._apply_pending_dpi()
+                    if self._pending_report_rate is not None:
+                        if self._pending_report_rate == "read":
+                            self._apply_pending_read_report_rate()
+                        else:
+                            self._apply_pending_report_rate()
                     if self._pending_smart_shift is not None:
                         self._apply_pending_smart_shift()
                     if self._pending_battery is not None:
@@ -2935,6 +3288,9 @@ class HidGestureListener:
             self._dpi_idx = None
             self._dpi_extended = False
             self._smart_shift_idx = None
+            self._report_rate_idx = None
+            self._report_rate_extended = False
+            self._report_rate_options = ()
             self._battery_idx = None
             self._battery_feature_id = None
             self._mouse_button_spy_idx = None
@@ -2945,6 +3301,8 @@ class HidGestureListener:
             self._pending_battery = None
             self._pending_dpi = None
             self._dpi_result = None
+            self._pending_report_rate = None
+            self._report_rate_result = None
             self._abort_pending_smart_shift()
             self._last_logged_battery = None
             self._consecutive_request_timeouts = 0
