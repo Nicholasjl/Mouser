@@ -1577,34 +1577,36 @@ class HidGestureListener:
                 return p[0]
         return None
 
-    def _query_device_name(self):
+    def _query_device_name(self, retries=3):
         """Query device name via HID++ feature 0x0005 (DEVICE_NAME_TYPE)."""
-        name_idx = self._find_feature(FEAT_DEVICE_NAME)
-        if name_idx is None:
-            return None
-        resp = self._request(name_idx, 0, [0x00] * 3)
-        if not resp:
-            return None
-        _, _, _, _, params = resp
-        name_len = params[0]
-        if name_len == 0:
-            return None
-        name_bytes = []
-        offset = 0
-        while offset < name_len:
-            resp = self._request(name_idx, 1, [offset, 0x00, 0x00])
-            if not resp:
-                break
-            _, _, _, _, chunk = resp
-            remaining = name_len - offset
-            name_bytes.extend(chunk[:remaining])
-            offset += len(chunk)
-            if len(chunk) == 0:
-                break
-        if not name_bytes:
-            return None
-        name = bytes(name_bytes).decode("ascii", errors="replace").strip("\x00").strip()
-        return name if name else None
+        for attempt in range(retries):
+            name_idx = self._find_feature(FEAT_DEVICE_NAME)
+            if name_idx is not None:
+                resp = self._request(name_idx, 0, [0x00] * 3)
+                if resp:
+                    _, _, _, _, params = resp
+                    name_len = params[0]
+                    if name_len > 0:
+                        name_bytes = []
+                        offset = 0
+                        while offset < name_len:
+                            resp = self._request(name_idx, 1, [offset, 0x00, 0x00])
+                            if not resp:
+                                break
+                            _, _, _, _, chunk = resp
+                            remaining = name_len - offset
+                            name_bytes.extend(chunk[:remaining])
+                            offset += len(chunk)
+                            if len(chunk) == 0:
+                                break
+                        if name_bytes:
+                            name = bytes(name_bytes).decode("ascii", errors="replace").strip("\x00").strip()
+                            if name:
+                                return name
+            if attempt < retries - 1:
+                print(f"[HidGesture] _query_device_name failed, retrying ({attempt + 1}/{retries})...")
+                time.sleep(0.2)
+        return None
 
     def _get_cid_reporting(self, cid):
         if self._feat_idx is None:

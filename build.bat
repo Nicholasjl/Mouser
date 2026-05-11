@@ -62,7 +62,7 @@ if /i "%~1"=="--clean" (
 
 :: ── 4. Run PyInstaller ───────────────────────────────────────
 echo [*] Building with PyInstaller...
-pyinstaller Mouser.spec --noconfirm
+python -m PyInstaller Mouser.spec --noconfirm
 
 if %errorlevel% neq 0 (
     echo.
